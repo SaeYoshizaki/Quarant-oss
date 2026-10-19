@@ -75,13 +75,15 @@ type suricataEVERecord struct {
 
 func runSuricata(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("suricata requires subcommand: import")
+		return fmt.Errorf("suricata requires subcommand: import or evidence")
 	}
 	switch args[0] {
 	case "import":
 		return runSuricataImportCLI(args[1:], out)
+	case "evidence":
+		return runSuricataEvidenceCLI(args[1:], out)
 	default:
-		return fmt.Errorf("unknown suricata subcommand %q; use import", args[0])
+		return fmt.Errorf("unknown suricata subcommand %q; use import or evidence", args[0])
 	}
 }
 
