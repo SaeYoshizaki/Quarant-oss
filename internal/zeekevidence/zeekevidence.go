@@ -374,7 +374,10 @@ func httpEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 		e.Message = "Media uploaded to a remote service over plaintext HTTP (Zeek HTTP parser)."
 		e.ObservedFact = "Zeek's content sniffing recognised image, video or audio in a cleartext HTTP request body sent to a non-local address."
 		e.Inference = "Camera snapshots, recordings or voice clips may be readable by anyone on the network path."
-		e.Limitation = "The content is not inspected or stored; whether it shows people or the home, and whether it is encrypted inside the file, is not known."
+		e.Limitation = "The content is not inspected or stored; whether it shows people or the home, and whether it is encrypted inside the file, is not known. Zeek's sniffing matches the first bytes only and can take a short body for media (O1: a 720-byte POST taken for audio)."
+		// Low: on its own this is not evidence (D25); it counts when
+		// Quarant's own check agrees.
+		e.Confidence = "low"
 		e.OWASPTags = []string{"I6", "I7"}
 		out = append(out, e)
 	}

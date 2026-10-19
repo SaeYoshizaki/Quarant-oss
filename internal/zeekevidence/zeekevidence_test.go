@@ -130,7 +130,7 @@ func TestMedia(t *testing.T) {
 	r.OrigMIME = []string{"text/plain", "image/jpeg", "image/jpeg"}
 	r.ReqBodyLen = 2048
 	evs := Convert([]Row{r}, local)
-	if len(evs) != 1 || evs[0].Type != "I6_MEDIA_UPLOAD_CLEARTEXT" || !strings.Contains(evs[0].Evidence, "content_magic=image/jpeg ") {
+	if len(evs) != 1 || evs[0].Type != "I6_MEDIA_UPLOAD_CLEARTEXT" || !strings.Contains(evs[0].Evidence, "content_magic=image/jpeg ") || evs[0].Confidence != "low" {
 		t.Fatalf("media: %+v", evs)
 	}
 	// Inside the home network: not an upload to a remote service.
