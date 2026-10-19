@@ -152,6 +152,12 @@ Zeek に PCAP を読ませて、規格の要件の証拠を作る（D24）。出
 go run ./cmd/quarant zeek evidence --pcap capture.pcap --out runs/zeek-evidence-001
 ```
 
+`analyze` の結果と通信ごとに重ねる（D25）。出力は `events.jsonl`（各イベントに `sources`）、`uncorroborated.jsonl`（Zeek の名前だけの一致で、Quarant が出していないもの）、`merge_summary.json`、`device_inventory.json`。
+
+```bash
+go run ./cmd/quarant zeek merge --quarant runs/demo --zeek runs/zeek-evidence-001 --out runs/merged-001
+```
+
 Quarant 単体との比較（O1）：
 
 ```bash

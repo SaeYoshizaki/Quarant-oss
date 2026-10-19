@@ -230,3 +230,18 @@
 - **限界**：
   - Zeek が分解しないもの（Telnet のログイン、UDP の `key=value`、HTTP 以外のメディア、RTSP）は、Zeek 経由では出ない。ファームウェアの更新、認証なしの操作、周期通信なども、まだ変換していない。
   - Zeek を組み込むと、Zeek を見逃しの正解（E11〜E14）に使えなくなる。
+
+## D25 Quarant 自身の結果と Zeek 経由の結果を、通信ごとに重ねる（2026-10-19）
+
+- **判断**（OSS の組み込みの手順 2）：
+  - `quarant zeek merge --quarant DIR --zeek DIR --out DIR`（`internal/corroborate`）。同じ流れのキー・同じ種類の報告を時刻順に並べ、1 時間（`analyzer.FlowIdleTimeout`）報告がなければ区切る。Quarant は流れを 1 時間保ち、同じルールを 1 度しか出さないので、その区切りを 1 つの通信とみなす。
+  - 両方が出したもの：Quarant のイベントを残し、`sources: ["quarant","zeek"]`、確度を 1 段上げる（low→medium→high）。限界に「一致したのは分解で、問題の重さではない」と書き足す。Zeek 側の重複は捨てる。
+  - Quarant だけ：そのまま（`sources: ["quarant"]`）。
+  - Zeek だけ：確度 medium 以上は証拠に加える（`sources: ["zeek"]`）。low（名前だけの一致、O1）は証拠にせず、`uncorroborated.jsonl` に分けて置く。
+  - 出力の `events.jsonl` と `device_inventory.json`（Quarant のものを写す）は、集計のスクリプトでそのまま読める。
+  - Zeek 経由のメディアの平文送信は確度を low にした（利用者と合意）。Zeek の内容判定は先頭のバイト列だけを見るので、短い本文を音声と取り違える（O1 の Philips Hue）。Quarant と一致したときだけ証拠になる。
+- **理由**：O1 で、Zeek の名前だけの一致は判定済みのものがすべて秘密ではなかった。単独では証拠にせず、Quarant と一致したときだけ使う。TLS や認証情報は両方の分解が独立に一致するので、確かめの材料になる。
+- **限界**：
+  - 種類が違うと対応づけない（Quarant の `INSECURE_HTTP_AUTH` の `x-token` と、Zeek の `INSECURE_HTTP_TOKEN` など）。
+  - イベントの時刻だけで区切るので、Quarant の流れの区切りとずれることがある（流れが続いている間に、最後の報告から 1 時間あとに来た報告を別の通信とみなす）。`flows.jsonl` があれば正確にできる。
+  - 確度を上げても、値が秘密かどうかは分からないまま（Zeek は名前しか見ない）。
