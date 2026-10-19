@@ -39,6 +39,23 @@ func TestI7TLSWeakVersionObservedTLS10(t *testing.T) {
 	}
 }
 
+// SSL 3.0 was missed before O2: only TLS 1.0 and 1.1 counted as old.
+func TestI7TLSWeakVersionObservedSSL30(t *testing.T) {
+	ctx := &Context{
+		TLS:           true,
+		TLSInfo:       &TLSClientHelloInfo{ClientVersion: 0x0300},
+		TLSServerInfo: &TLSServerInfo{ServerVersion: 0x0300},
+	}
+	match, ok := (&I7TLSWeakVersionRule{}).Apply(ctx)
+	if !ok || !strings.Contains(match.Evidence, "tls_version=SSL3.0") {
+		t.Fatalf("SSL 3.0: ok=%v %s", ok, match.Evidence)
+	}
+	ctx.TLSServerInfo = nil
+	if _, ok := (&I7TLSWeakVersionRule{}).Apply(ctx); !ok {
+		t.Fatal("SSL 3.0 as the client's highest offer")
+	}
+}
+
 func TestI7TLSWeakVersionDoesNotMisclassifyWhenSupportedVersionsIncludesTLS13(t *testing.T) {
 	ctx := &Context{
 		NowUnix: time.Now().Unix(),

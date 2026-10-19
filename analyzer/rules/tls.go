@@ -274,6 +274,8 @@ func BuildJA3Hash(info TLSClientHelloInfo) string {
 
 func TLSVersionName(version uint16) string {
 	switch version {
+	case 0x0300:
+		return "SSL3.0"
 	case 0x0301:
 		return "TLS1.0"
 	case 0x0302:
@@ -372,8 +374,9 @@ func TLSCipherSuiteName(id uint16) string {
 	return "0x" + strings.ToUpper(strconv.FormatUint(uint64(id), 16))
 }
 
+// IsWeakTLSVersion: SSL 3.0 (RFC 7568), TLS 1.0 and 1.1 (RFC 8996).
 func IsWeakTLSVersion(version uint16) bool {
-	return version == 0x0301 || version == 0x0302
+	return version == 0x0300 || version == 0x0301 || version == 0x0302
 }
 
 func ClassifyTLSVersion(version uint16, selectedOrOffered string) (TLSRiskClassification, bool) {
