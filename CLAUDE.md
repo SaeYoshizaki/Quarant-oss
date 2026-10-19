@@ -2,6 +2,8 @@
 
 Quarant：家庭内 IoT 機器の通信を**パッシブに**監視し、何が分かり何が分からないかを根拠つきで示す研究用システム（Go）。
 
+**このリポジトリ（Quarant-oss）は、OSS（Zeek、Suricata）を組み込む版（論文 2）**。Quarant 単体の版は元の Quarant リポジトリにあり、比べる相手として残している。単体の解析（`quarant analyze`）を変える変更は、ここだけで行い、元のリポジトリには入れない。
+
 ## 最初に読むもの
 
 - [docs/STATUS.md](docs/STATUS.md)：現状、既知の問題、次の作業
