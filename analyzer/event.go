@@ -42,6 +42,9 @@ type Event struct {
 	// Source names the analyser that produced the event when it is not
 	// Quarant's own parser (e.g. "zeek").
 	Source string `json:"source,omitempty"`
+	// Sources lists every analyser that reported the finding on this
+	// connection, after the outputs are overlaid (internal/corroborate).
+	Sources []string `json:"sources,omitempty"`
 
 	SrcIP   string `json:"src_ip,omitempty"`
 	SrcPort uint16 `json:"src_port,omitempty"`

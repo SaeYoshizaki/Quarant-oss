@@ -131,6 +131,11 @@ func (h *FlowHandler) affectedDeviceIP(eventType string, st *FlowState) string {
 // capture time so that offline analysis is deterministic.
 const flowCleanupInterval = 10 * time.Second
 
+// FlowIdleTimeout is how long a flow key stays one flow without packets.
+// Each rule reports once per flow, so a connection that reuses
+// the key within this time is not reported again.
+const FlowIdleTimeout = time.Hour
+
 // finishFlow writes the final record of a flow leaving the cache and hands it
 // to the behaviour analyzer.
 func (h *FlowHandler) finishFlow(now time.Time, key string, st *FlowState) {
@@ -177,7 +182,7 @@ func NewFlowHandlerWithObservations(eventSink, flowSink, observationSink *JSONLS
 		eventSink:       eventSink,
 		flowSink:        flowSink,
 		observationSink: observationSink,
-		cache:           NewFlowCache(16*1024, 1*time.Hour),
+		cache:           NewFlowCache(16*1024, FlowIdleTimeout),
 		debug:           debug,
 		devices:         device.NewStore(),
 		knowledge:       db,

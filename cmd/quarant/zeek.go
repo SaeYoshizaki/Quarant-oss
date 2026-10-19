@@ -31,15 +31,17 @@ type zeekImportResult struct {
 
 func runZeek(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("zeek requires subcommand: import or evidence")
+		return fmt.Errorf("zeek requires subcommand: import, evidence or merge")
 	}
 	switch args[0] {
 	case "import":
 		return runZeekImportCLI(args[1:], out)
 	case "evidence":
 		return runZeekEvidenceCLI(args[1:], out)
+	case "merge":
+		return runZeekMergeCLI(args[1:], out)
 	default:
-		return fmt.Errorf("unknown zeek subcommand %q; use import or evidence", args[0])
+		return fmt.Errorf("unknown zeek subcommand %q; use import, evidence or merge", args[0])
 	}
 }
 
