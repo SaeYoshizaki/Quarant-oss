@@ -96,7 +96,9 @@
    - O1 と同じ入力で試した（O2）：機器ごとの結論は全要件で Quarant 単体と同じ。Zeek 経由のメディアは、内容判定の誤り（Philips Hue）があったので low にした（利用者と合意）。
    - 重ねたことで、Quarant が SSL 3.0 を古い版として扱っていない抜けが見つかり、直した（9 接続・4 台。機器ごとの数は変わらない見込み）。
    - 残り：PCAP から解析し直した結果で試す。Quarant の古い版の規則は、ServerHello がなくても `selected_or_offered=selected` と書く（Zeek 経由は offered と分ける）。
-3. Suricata の警告を、機器ごとの証拠に加える。
+3. Suricata の警告を、機器ごとの証拠に加える：**試作済み（2026-10-19、D26）**。`quarant suricata evidence`、重ね合わせは `quarant merge --zeek --suricata`。
+   - S2 の出力で試した（O3）：Quarant にないものは、外から届くサービスの 2 台（Samsung SmartCam の SNMP `public`、HS110 の 9999 番）。乗っ取られた機器（IoT-23 3-1）は Quarant も振る舞いで捉えていて、Suricata はマルウェアの種類を加えた。
+   - 残り：規格の要件への対応づけ（利用者に相談）。CIC IoT 2022 と YourThings で Suricata を回す。
 4. 今の Quarant だけの場合と比べる。注意：Zeek を組み込むと、Zeek を見逃しの正解に使えない。会議までは、生パケットの検索と、判定済みの YourThings の候補を正解にし、その限界を書く。
 - まだ決めていないこと：会議の日程（どこまで作るか）。
 

@@ -245,3 +245,21 @@
   - 種類が違うと対応づけない（Quarant の `INSECURE_HTTP_AUTH` の `x-token` と、Zeek の `INSECURE_HTTP_TOKEN` など）。
   - イベントの時刻だけで区切るので、Quarant の流れの区切りとずれることがある（流れが続いている間に、最後の報告から 1 時間あとに来た報告を別の通信とみなす）。`flows.jsonl` があれば正確にできる。
   - 確度を上げても、値が秘密かどうかは分からないまま（Zeek は名前しか見ない）。
+
+## D26 Suricata の警告を、機器ごとの証拠にする（2026-10-19）
+
+- **判断**（OSS の組み込みの手順 3）：
+  - `quarant suricata evidence --eve eve.json --out DIR`（`internal/suricataevidence`）。警告を、機器 × 種類 × ルール（sid）ごとに 1 件のイベントにまとめる（警告の数、flow の数、相手の数、最初と最後の時刻）。根拠の種類はすべて `reference_match`、`source: suricata`。
+  - 種類（ルールの系統で分ける）：
+    - マルウェア（ET MALWARE、TROJAN、CNC など）：`SURICATA_MALWARE_SIGNATURE`、medium。
+    - 攻撃（ET SCAN、DOS、EXPLOIT、GPL SNMP など）で機器が送信元：`SURICATA_OUTBOUND_ATTACK_SIGNATURE`、medium。
+    - 同じ系統で機器が宛先、かつ機器が応答した：`SURICATA_INBOUND_ATTACK_ANSWERED`、medium。応答は Suricata の flow の記録で判断する（TCP は SYN-ACK、ほかはパケットが返ったこと。RST だけは応答としない）。データを返したかも数える。
+    - 応答のない攻撃：`SURICATA_INBOUND_ATTACK_SIGNATURE`、low。機器が狙われただけ。
+    - 評判のリスト（ET DROP、CINS、COMPROMISED、TOR、JA3、危ない TLD）：`SURICATA_REPUTATION_MATCH`、low。リストはルールを取得した時点のもので、通信の時点のものではない（S2）。
+    - 情報系（INFO、POLICY、CHAT、P2P など）と Suricata 自体の内部イベント：変換しない（件数だけ出す）。
+  - 重ね合わせは `quarant merge --quarant DIR [--zeek DIR] [--suricata DIR] --out DIR` にまとめた（`zeek merge` も残す）。Suricata のイベントは流れのキーを持たないので Quarant とは対応づけず、low は保留に回す（D25 と同じ）。
+- **理由**：Suricata は、Quarant にないシグネチャ照合（マルウェアの種類、反射攻撃）を持つ（S2）。対策（第 2 弾）では、乗っ取りの疑いや外から届くサービスが、隔離や遮断を選ぶ材料になる。
+- **限界**：
+  - 規格の要件にはまだ対応づけていない（evidence-map は変えていない）。
+  - ルールの系統で分けるので、系統の中の個々のルールの意味までは見ていない。
+  - 応答の有無は flow の記録だけで見ていて、応答の中身（エラーかどうか）は分からない。

@@ -152,10 +152,17 @@ Zeek に PCAP を読ませて、規格の要件の証拠を作る（D24）。出
 go run ./cmd/quarant zeek evidence --pcap capture.pcap --out runs/zeek-evidence-001
 ```
 
-`analyze` の結果と通信ごとに重ねる（D25）。出力は `events.jsonl`（各イベントに `sources`）、`uncorroborated.jsonl`（Zeek の名前だけの一致で、Quarant が出していないもの）、`merge_summary.json`、`device_inventory.json`。
+Suricata の警告を、機器ごとの証拠にする（D26）。
 
 ```bash
-go run ./cmd/quarant zeek merge --quarant runs/demo --zeek runs/zeek-evidence-001 --out runs/merged-001
+go run ./cmd/quarant suricata evidence --eve eve.json --out runs/suricata-evidence-001
+```
+
+`analyze` の結果と通信ごとに重ねる（D25、D26）。`quarant merge --quarant DIR [--zeek DIR] [--suricata DIR] --out DIR`。`zeek merge` は Zeek だけの形。出力は `events.jsonl`（各イベントに `sources`）、`uncorroborated.jsonl`（Zeek・Suricata の確度 low で、Quarant が出していないもの）、`merge_summary.json`、`device_inventory.json`。
+
+```bash
+go run ./cmd/quarant merge --quarant runs/demo --zeek runs/zeek-evidence-001 \
+  --suricata runs/suricata-evidence-001 --out runs/merged-001
 ```
 
 Quarant 単体との比較（O1）：

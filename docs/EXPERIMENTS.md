@@ -1223,3 +1223,27 @@ python3 scripts/accuracy/compare_misses.py docs/assessment/evidence-map.json ~/d
 **分かったこと**：変換した範囲では、Zeek を重ねても機器ごとの結論は変わらず、一致の記録（`sources`）が加わる。Zeek の名前だけの一致などは 9,384 件を保留にした。Zeek と重ねたことで、Quarant の規則の抜け（SSL 3.0）が見つかった。
 
 **限界**：入力は O1 と同じ古い版。PCAP から解析し直した結果ではまだ試していない。
+
+## O3：Suricata の警告を機器ごとの証拠にする（OSS の組み込みの手順 3、2026-10-19）
+
+**目的**：Suricata の警告を機器ごとの証拠にしたとき（D26）、Quarant の結果に何が加わるかを見る。
+
+**方法**：S2 で出した Suricata 8.0.7（ET Open）の `eve.json`（IoT-23 8、UNSW 2016 3、UNSW 2018 6）を `quarant suricata evidence` で変換し、`quarant merge` で Quarant（`runs-fix4`）と Zeek 経由（`runs-zeekev-gt2`）に重ねた（`~/datasets/runs-suri-s2/`、`runs-merge-s2/`）。
+
+**結果**（確度 medium で証拠になったもの。IoT ではない機器は除く）
+
+| データ | 機器 | 種類 | 中身 | Quarant 側 |
+|---|---|---|---|---|
+| IoT-23 3-1 | Raspberry Pi（192.168.2.5） | マルウェア、外向きの攻撃 | Muhstik の C&C（2 ルール）、SSH スキャン 50,479 件（相手 40,748） | 外向きスキャンの疑い、執拗な接続試行 |
+| UNSW 2018 06-02 | Samsung SmartCam | 外からの攻撃に応答 | SNMP の community `public`（と空の community）で、外部からの要求に 3 flow でデータを返した | なし |
+| UNSW 2018 06-01 | TP-Link HS110 | 外からの攻撃に応答 | 外部から 9999 番（TP-Link の操作用）への接続を受け付けた（データは返していない） | なし |
+
+- HP の PC 2 台（IoT ではない）も、外からの 22 番への探りに応答していた。
+- 保留（low）：評判のリスト 23 件、応答のない攻撃 3 件（SSDP の反射攻撃。狙われた Chromecast などは応答していない）。
+- 変換しなかった警告のほとんどは、Suricata 自体の内部イベントと ET INFO。
+
+**分かったこと**：
+- 乗っ取られた機器（IoT-23 3-1）は、Quarant も振る舞いで捉えていた。Suricata はマルウェアの種類を加える。
+- Quarant にないものは、外から届くサービスの 2 台。SmartCam は、SNMP v1/v2c が community の違う要求に応答しないことから、初期の community `public` を受け付けていたと読める（5.1-1 の候補）。HS110 は、操作用のポートが外から届いていた。
+
+**限界**：S2 の古い出力（Quarant は `runs-fix4`）。UNSW 2018 は攻撃を流した実験環境で、外から届く経路は実験のための設定かもしれない。CIC IoT 2022 と YourThings では Suricata を回していない。
