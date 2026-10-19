@@ -68,6 +68,10 @@ func main() {
 		if err := runSuricata(args[1:], os.Stdout); err != nil {
 			log.Fatal(err)
 		}
+	case "merge":
+		if err := runMergeCLI(args[1:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
 	case "zeek":
 		if err := runZeek(args[1:], os.Stdout); err != nil {
 			log.Fatal(err)
