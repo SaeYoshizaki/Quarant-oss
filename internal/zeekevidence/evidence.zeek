@@ -1,7 +1,10 @@
 # Zeek side of `quarant zeek evidence`. Zeek parses HTTP, TLS, MQTT, FTP,
 # SSH and SNMP (found by content, so the port does not matter) and this
 # script writes one row per TLS session, HTTP request, MQTT CONNECT, FTP
-# login, SSH session and SNMP exchange to quarant_evidence.log. Quarant turns the rows into evidence for the ETSI
+# login, SSH session and SNMP exchange to quarant_evidence.log, plus one row
+# per software name and version a home-network host names (Zeek's software
+# framework: HTTP Server and User-Agent, SSH and FTP banners, DHCP vendor
+# class). Quarant turns the rows into evidence for the ETSI
 # provisions (internal/zeekevidence).
 #
 # Only names and shapes are logged, never values: header names, URL
@@ -20,6 +23,14 @@
 @load base/protocols/ssh
 @load base/protocols/snmp
 @load base/files/x509
+@load base/frameworks/software
+@load policy/protocols/http/software
+@load policy/protocols/ssh/software
+@load policy/protocols/ftp/software
+@load policy/protocols/dhcp/software
+
+# Track every host; only private addresses are written (see log_software).
+redef Software::asset_tracking = ALL_HOSTS;
 
 module QuarantEvidence;
 
@@ -77,6 +88,13 @@ export {
 		# The address that answered (the agent), when a response was seen
 		snmp_agent: addr &log &optional;
 		snmp_responses: count &log &optional;
+		# Software: the name and the numeric version only. The unparsed
+		# string and Zeek's "addl" part are not written: a User-Agent can
+		# carry identifiers there.
+		sw_host: addr &log &optional;
+		sw_type: string &log &optional;
+		sw_name: string &log &optional;
+		sw_version: string &log &optional;
 	};
 }
 
@@ -352,4 +370,26 @@ event ftp_request(c: connection, command: string, arg: string)
 		r$anonymous = c$qe_ftp_anon;
 		Log::write(QuarantEvidence::LOG, r);
 		}
+	}
+
+event Software::log_software(rec: Software::Info)
+	{
+	if ( ! Site::is_private_addr(rec$host) )
+		return;
+	local v = rec$version;
+	local ver = "";
+	if ( v?$major )
+		{
+		ver = cat(v$major);
+		if ( v?$minor ) ver += cat(".", v$minor);
+		if ( v?$minor2 ) ver += cat(".", v$minor2);
+		if ( v?$minor3 ) ver += cat(".", v$minor3);
+		}
+	local r = Info($ts=rec$ts, $uid="", $kind="software", $orig_h=rec$host,
+	               $orig_p=rec?$host_p ? rec$host_p : 0/unknown, $resp_h=0.0.0.0, $resp_p=0/unknown);
+	r$sw_host = rec$host;
+	r$sw_type = cat(rec$software_type);
+	r$sw_name = rec$name;
+	if ( ver != "" ) r$sw_version = ver;
+	Log::write(QuarantEvidence::LOG, r);
 	}

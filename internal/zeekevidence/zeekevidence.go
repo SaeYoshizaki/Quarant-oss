@@ -23,9 +23,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"quarant/analyzer"
+	"quarant/internal/versionvuln"
 )
 
 //go:embed evidence.zeek
@@ -85,6 +87,11 @@ type Row struct {
 	SNMPDefaultCommunity bool   `json:"snmp_default_community"`
 	SNMPAgent            string `json:"snmp_agent"`
 	SNMPResponses        int    `json:"snmp_responses"`
+
+	SWHost    string `json:"sw_host"`
+	SWType    string `json:"sw_type"`
+	SWName    string `json:"sw_name"`
+	SWVersion string `json:"sw_version"`
 }
 
 // RunZeek runs Zeek with evidence.zeek over pcap inside workDir and returns
@@ -179,8 +186,18 @@ var (
 // Convert turns rows into events. local decides which end is a device.
 func Convert(rows []Row, local analyzer.LocalNetworks) []analyzer.Event {
 	var out []analyzer.Event
+	// Zeek names a host's software once per run; a capture split into many
+	// files names it once per file.
+	seenSoftware := map[string]bool{}
 	for _, r := range rows {
 		switch r.Kind {
+		case "software":
+			k := r.SWHost + "|" + r.SWType + "|" + strings.ToLower(r.SWName) + "|" + r.SWVersion
+			if seenSoftware[k] {
+				continue
+			}
+			seenSoftware[k] = true
+			out = append(out, softwareEvents(r, local)...)
 		case "tls":
 			out = append(out, tlsEvents(r, local)...)
 		case "http":
@@ -227,10 +244,15 @@ func deviceEnd(r Row, local analyzer.LocalNetworks, serverSide bool) string {
 	}
 }
 
-func baseEvent(r Row, typ, category string, sev analyzer.Severity, device string) analyzer.Event {
+// rowTime is the capture time of the row (microseconds, as Zeek writes).
+func rowTime(r Row) time.Time {
 	sec, frac := math.Modf(r.TS)
+	return time.Unix(int64(sec), int64(math.Round(frac*1e6))*1e3).UTC()
+}
+
+func baseEvent(r Row, typ, category string, sev analyzer.Severity, device string) analyzer.Event {
 	return analyzer.Event{
-		Timestamp:  time.Unix(int64(sec), int64(math.Round(frac*1e6))*1e3).UTC(),
+		Timestamp:  rowTime(r),
 		Type:       typ,
 		Severity:   sev,
 		RuleID:     "ZEEK_" + typ,
@@ -443,6 +465,106 @@ func snmpEvent(r Row, local analyzer.LocalNetworks) (analyzer.Event, bool) {
 	e.Inference = "The community works as a password and can be read by anyone on the network path."
 	e.Limitation = "The value was not examined; what the community allows is not known."
 	return e, true
+}
+
+// Where a device names its software to anyone who asks, without
+// authentication. Server banners and the DHCP vendor class reach every
+// client or the whole network; a User-Agent goes to the device's own
+// services and is not counted as disclosure.
+var disclosureTypes = map[string]struct {
+	what, confidence, note string
+}{
+	"HTTP::SERVER": {"the Server header of its web server", "medium", "RFC 9110 makes the Server header optional and advises against fine-grained detail."},
+	"FTP::SERVER":  {"its FTP greeting", "medium", "FTP does not require a version in the greeting."},
+	"DHCP::CLIENT": {"the DHCP vendor class it broadcasts", "medium", "The vendor class (RFC 2132 option 60) is optional."},
+	"SSH::SERVER":  {"its SSH banner", "low", "SSH requires a software version field in the banner (RFC 4253 4.2), so naming the software is expected by the protocol."},
+}
+
+// Names that come from the UPnP SERVER string ("Linux/2.6 UPnP/1.0
+// product/1.0"), whose OS and UPnP version the UPnP Device Architecture
+// requires; Zeek takes its first token as the HTTP server.
+var upnpMandated = map[string]bool{"linux": true, "unspecified": true}
+
+// plausibleDisclosure leaves out names that come from the UPnP string and
+// one-letter names that are parse artefacts ("H.264" read as "H" 264).
+func plausibleDisclosure(name string) bool {
+	n := strings.ToLower(name)
+	return len(n) > 1 && !upnpMandated[n] && !strings.Contains(n, "upnp")
+}
+
+var vulnDB = sync.OnceValues(versionvuln.Load)
+
+func softwareEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
+	if r.SWHost == "" || !local.Contains(r.SWHost) || r.SWName == "" {
+		return nil
+	}
+	var out []analyzer.Event
+	sw := fmt.Sprintf("software_type=%s name=%q version=%s", r.SWType, r.SWName, r.SWVersion)
+	tail := fmt.Sprintf(" host=%s source=zeek", r.SWHost)
+	if d, ok := disclosureTypes[r.SWType]; ok && r.SWVersion != "" && plausibleDisclosure(r.SWName) {
+		e := baseEvent(r, "I3_SOFTWARE_VERSION_DISCLOSED", "I3", analyzer.SeverityInfo, r.SWHost)
+		e.FlowKey, e.SrcIP, e.SrcPort, e.DstIP, e.DstPort = "", r.SWHost, 0, "", 0
+		e.Evidence = sw + tail
+		e.Message = "Device names its software version without authentication (Zeek software framework)."
+		e.ObservedFact = fmt.Sprintf("The device named %s %s in %s.", r.SWName, r.SWVersion, d.what)
+		e.Inference = "Anyone on the network can learn the component version and look up its known vulnerabilities."
+		e.Limitation = d.note + " The named version may not be the one running."
+		e.Confidence = d.confidence
+		e.OWASPTags = []string{"I3"}
+		out = append(out, e)
+	}
+	db, err := vulnDB()
+	if err != nil || r.SWVersion == "" {
+		return out
+	}
+	product, hits := db.Match(r.SWName, r.SWVersion, rowTime(r))
+	if len(hits) == 0 {
+		return out
+	}
+	var list []string
+	kev, partial := 0, true
+	for i, h := range hits {
+		if h.CVE.KEV {
+			kev++
+		}
+		if !h.Partial {
+			partial = false
+		}
+		if i < 5 {
+			list = append(list, fmt.Sprintf("%s(%s,%dd)", h.CVE.ID, strings.ToLower(h.CVE.Severity), h.DaysPublished))
+		}
+	}
+	e := baseEvent(r, "I5_VULNERABLE_VERSION_CANDIDATE", "I5", analyzer.SeverityWarning, r.SWHost)
+	e.FlowKey, e.SrcIP, e.SrcPort, e.DstIP, e.DstPort = "", r.SWHost, 0, "", 0
+	e.Basis = analyzer.BasisReferenceMatch
+	e.Evidence = fmt.Sprintf("%s cpe=%s cve_count=%d kev_count=%d oldest_days=%d cves=%s knowledge=component_cves.json@%s",
+		sw, product.CPE, len(hits), kev, maxDays(hits), strings.Join(list, ","), db.Fetched) + tail
+	e.Message = "A software version the device names is in the affected range of published CVEs (NVD)."
+	e.ObservedFact = fmt.Sprintf("The device named %s %s (%s); %d CVEs published before the capture list this version as affected.", r.SWName, r.SWVersion, r.SWType, len(hits))
+	e.Inference = "The component may carry known vulnerabilities that were public, some for a long time, when the traffic was captured."
+	e.Limitation = "A candidate, not a finding: the named version may not be the one running, vendors backport fixes without changing the version string, and the affected feature may not be built in. Only CVEs published before the capture are counted."
+	e.Confidence = "medium"
+	if partial {
+		e.Confidence = "low"
+		e.Limitation += " The named version has fewer parts than the affected versions, so it may be outside the range."
+	}
+	if product.Suite {
+		e.Confidence = "low"
+		e.Limitation += " The product bundles many programs; a CVE may concern one the device does not build in."
+	}
+	e.OWASPTags = []string{"I5"}
+	out = append(out, e)
+	return out
+}
+
+func maxDays(hits []versionvuln.Hit) int {
+	m := 0
+	for _, h := range hits {
+		if h.DaysPublished > m {
+			m = h.DaysPublished
+		}
+	}
+	return m
 }
 
 func clientMax(cv string) string {

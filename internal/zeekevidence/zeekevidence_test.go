@@ -348,3 +348,52 @@ func TestRunZeekSNMP(t *testing.T) {
 		t.Errorf("the community value reached the log")
 	}
 }
+
+func swRow(typ, name, version string) Row {
+	// 2018-03-20, as in YourThings.
+	return Row{TS: 1521545718.16, Kind: "software", OrigH: "192.168.1.30", SWHost: "192.168.1.30", SWType: typ, SWName: name, SWVersion: version}
+}
+
+func TestSoftware(t *testing.T) {
+	got := func(rows ...Row) map[string]analyzer.Event {
+		m := map[string]analyzer.Event{}
+		for _, e := range Convert(rows, local) {
+			m[e.Type] = e
+		}
+		return m
+	}
+	// A device's SSH server names an old Dropbear: disclosure (low, the
+	// protocol asks for it) and a vulnerable-version candidate.
+	evs := got(swRow("SSH::SERVER", "dropbear", "0.53.1"))
+	d, v := evs["I3_SOFTWARE_VERSION_DISCLOSED"], evs["I5_VULNERABLE_VERSION_CANDIDATE"]
+	if d.Confidence != "low" || v.Type == "" || v.Basis != analyzer.BasisReferenceMatch || v.Confidence != "medium" || v.DeviceKey != "192.168.1.30" {
+		t.Fatalf("dropbear: %+v", evs)
+	}
+	if !strings.Contains(v.Evidence, "cpe=dropbear_ssh_project:dropbear_ssh") || strings.Contains(v.Evidence, "CVE-2024") {
+		t.Errorf("only CVEs published before the capture: %s", v.Evidence)
+	}
+	// HTTP Server header: disclosure at medium.
+	evs = got(swRow("HTTP::SERVER", "lighttpd", "1.4.29"))
+	if evs["I3_SOFTWARE_VERSION_DISCLOSED"].Confidence != "medium" {
+		t.Errorf("lighttpd: %+v", evs)
+	}
+	// UPnP's SERVER string is required by UPnP; a User-Agent is not
+	// disclosure; a version-less name says nothing.
+	if evs := got(swRow("HTTP::SERVER", "Linux UPnP", "1.0"), swRow("HTTP::SERVER", "Roku UPnP", "1.0"), swRow("HTTP::SERVER", "H", "264"), swRow("HTTP::BROWSER", "okhttp", "3.2.0"), swRow("HTTP::SERVER", "GoAhead-Webs", "")); len(evs) != 0 {
+		t.Errorf("not disclosure: %v", evs)
+	}
+	// A client component still gets a candidate (udhcp is BusyBox's); low,
+	// as BusyBox CVEs may concern applets the device lacks.
+	if evs := got(swRow("DHCP::CLIENT", "udhcp", "1.19.4")); evs["I5_VULNERABLE_VERSION_CANDIDATE"].Confidence != "low" || evs["I3_SOFTWARE_VERSION_DISCLOSED"].Type == "" {
+		t.Errorf("udhcp: %v", evs)
+	}
+	// Remote hosts are not devices; repeated rows count once.
+	r := swRow("SSH::SERVER", "dropbear", "0.53.1")
+	r.SWHost = "203.0.113.5"
+	if evs := Convert([]Row{r}, local); len(evs) != 0 {
+		t.Errorf("remote: %v", types(evs))
+	}
+	if evs := Convert([]Row{swRow("SSH::SERVER", "dropbear", "0.53.1"), swRow("SSH::SERVER", "dropbear", "0.53.1")}, local); len(evs) != 2 {
+		t.Errorf("duplicates: %v", types(evs))
+	}
+}

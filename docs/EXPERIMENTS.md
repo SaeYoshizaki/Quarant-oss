@@ -1269,3 +1269,23 @@ python3 scripts/accuracy/compare_misses.py docs/assessment/evidence-map.json ~/d
 - サーバー側の証拠の多くは、検査用のツールの接続で見えたもの。家庭では、アプリからの接続で同じものが見える。
 
 **限界**：3/20 の Quarant 単体の解析結果が手元にないので、機器ごとの比較（ほかの証拠ですでに 5.5-1 に数えられていた機器か）はまだ。2018 年のデータなので、SHA-1 の証明書は当時まだ使われていた時期にあたる。基準は今の規格の読み方による。
+
+## O5：ソフトウェアの版の開示と、脆弱性のある版の候補（YourThings 2018-03-20、2026-10-21）
+
+**目的**：D28 の検出が、実際の通信で何を出すかを見る。
+
+**方法**：O4 と同じ 3/20 のデータを、版の取り出しを加えた `evidence.zeek` で解析し、変換した。知識ファイルは 2026-10-21 に NVD から取得（Dropbear 20、OpenSSH 138、lighttpd 35、BusyBox 45、gSOAP 10、dhcpcd 2 件の CVE。KEV に入っているものはなかった）。IoT ではない機器は除いた。
+
+**結果**（機器の台数）
+
+| 検出 | 確度 | 台数 | 例 |
+|---|---|---|---|
+| 版の開示 | medium | 25 | VeraLite の lighttpd 1.4.29、中国製の Web カメラの uc-httpd 1.0.0 と gSOAP 2.7、DHCP の udhcp・dhcpcd |
+| 版の開示（SSH） | low | 4 | VeraLite の Dropbear 0.53.1、Insteon Hub の OpenSSH 6.6.1 |
+| 脆弱性のある版の候補 | medium | 6 | VeraLite（lighttpd 1.4.29、Dropbear 0.53.1。最も古い CVE は公開から約 6 年）、Insteon Hub（OpenSSH 6.6.1、15 件）、Wink 2 Hub（Dropbear 2016.73、CVE-2016-7406 など）、Google Home と Home Mini（dhcpcd 5.2.10）、Caseta（OpenSSH 7.5） |
+| 脆弱性のある版の候補 | low | 14 | BusyBox の udhcp を名乗る機器（Hue、Echo、Nest カメラなど）、gSOAP 2.7 |
+
+- 最初の結果では、`Roku UPnP`（UPnP が求める名乗り）と `H` 264（`H.264` の読み違い）が開示に入っていたので、外した。
+- BusyBox の CVE には、シェルの補完など、DHCP と関係のない機能のものが含まれる。どの機能が組み込まれているかは通信から分からないので、low にした。
+
+**限界**：候補は、名乗った版にもとづく。動いている版や修正の取り込みは確かめていない。3/20 の 1 日分だけ。

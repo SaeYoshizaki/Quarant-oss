@@ -83,9 +83,12 @@
    "provision": "5.2-2",
    "reach": "fail_only",
    "violation_evidence": "The observed firmware version is affected by a public CVE long after a fix was disclosed.",
-   "signals": [],
-   "status": "not_implemented",
-   "gap": "I5 matches device families, not versions against CVE timelines.",
+   "signals": [
+    "I5_VULNERABLE_VERSION_CANDIDATE"
+   ],
+   "status": "candidate_only",
+   "gap": "The version a device names (HTTP Server, SSH banner, DHCP vendor class) is matched against NVD affected ranges, counting only CVEs published before the capture. The named version may not be the one running, vendors backport fixes without changing the version string, and the affected feature may not be built in (BusyBox applets). How long counts as 'timely' is not decided; the evidence gives the days since publication.",
+   "audit": "2026-10-21 (D28): added from the Zeek path; awaiting the user's review of the mapping.",
    "reading": "strict"
   },
   {
@@ -116,9 +119,12 @@
    "provision": "5.3-8",
    "reach": "fail_only",
    "violation_evidence": "A disclosed vulnerability stays unpatched on the observed version for long.",
-   "signals": [],
-   "status": "not_implemented",
-   "gap": "As 5.2-2.",
+   "signals": [
+    "I5_VULNERABLE_VERSION_CANDIDATE"
+   ],
+   "status": "candidate_only",
+   "gap": "The version a device names (HTTP Server, SSH banner, DHCP vendor class) is matched against NVD affected ranges, counting only CVEs published before the capture. The named version may not be the one running, vendors backport fixes without changing the version string, and the affected feature may not be built in (BusyBox applets). How long counts as 'timely' is not decided; the evidence gives the days since publication.",
+   "audit": "2026-10-21 (D28): added from the Zeek path; awaiting the user's review of the mapping.",
    "reading": "strict"
   },
   {
@@ -209,6 +215,7 @@
    "reach": "fail_only",
    "violation_evidence": "Unauthenticated discovery or banner traffic discloses software versions that the protocol does not require.",
    "signals": [
+    "I3_SOFTWARE_VERSION_DISCLOSED",
     "identity_evidence:ssdp_server",
     "identity_evidence:mdns_txt"
    ],
@@ -216,7 +223,7 @@
    "status": "candidate_only",
    "assumption": "the disclosed version is security-relevant and not needed for operation",
    "gap": "Most visible version strings are mandated by the protocol (UPnP SERVER header) or are protocol versions (mDNS pv=, vers=); TS 5.6-2 itself notes that standard protocols may require such disclosure.",
-   "audit": "E4 sample: 0/22 discovery version strings were evidence of a violation.",
+   "audit": "E4 sample: 0/22 discovery version strings were evidence of a violation. 2026-10-21 (D28): added from the Zeek path; awaiting the user's review of the mapping. Versions in HTTP Server headers, FTP greetings and the DHCP vendor class are not required by those protocols; SSH banners and the UPnP SERVER string are, and are left at low confidence or out.",
    "reading": "strict"
   },
   {
