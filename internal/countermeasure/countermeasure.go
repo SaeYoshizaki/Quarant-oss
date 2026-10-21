@@ -23,6 +23,7 @@ package countermeasure
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -44,12 +45,32 @@ var Countermeasures = []string{BlockInbound, BlockWeakDestinations, Isolate}
 
 // Rule is one gateway rule. Device is the device's address in the
 // capture; Peer and PeerPort are set for block_weak_destinations.
+//
+// A rule applied to another capture than the one it came from should name
+// the device by MAC (DeviceMAC) and the destination by name (Domain):
+// addresses change between days (DHCP leases, cloud load balancing). A
+// gateway that blocks by name learns the addresses from the DNS answers
+// it relays; Filter does the same with the DNS answers in the capture.
 type Rule struct {
 	Countermeasure string `json:"countermeasure"`
 	Device         string `json:"device"`
+	DeviceMAC      string `json:"device_mac,omitempty"`
 	Peer           string `json:"peer,omitempty"`
 	PeerPort       uint16 `json:"peer_port,omitempty"`
+	Domain         string `json:"domain,omitempty"`
 	Reason         string `json:"reason"`
+}
+
+// domainRe takes the destination name from an event's evidence (Quarant's
+// sni=/host=, the Zeek path's peer=).
+var domainRe = regexp.MustCompile(`\b(?:sni|host|peer)="?([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,63})\b`)
+
+func domainOf(evidence string) string {
+	m := domainRe.FindStringSubmatch(evidence)
+	if m == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSuffix(m[1], "."))
 }
 
 // Event types whose internet endpoint block_weak_destinations stops: what
@@ -66,11 +87,16 @@ var weakTypes = map[string]bool{
 // Plan derives the rules from the evidence. Only events at medium or high
 // confidence count (low ones are not evidence on their own, D25), and only
 // events about a device in the home network.
-func Plan(events []analyzer.Event, local analyzer.LocalNetworks) []Rule {
+// macOf gives a device's MAC in this capture ("" when unknown).
+func Plan(events []analyzer.Event, local analyzer.LocalNetworks, macOf func(ip string) string) []Rule {
+	if macOf == nil {
+		macOf = func(string) string { return "" }
+	}
 	seen := map[string]bool{}
 	var out []Rule
 	add := func(r Rule) {
-		k := r.Countermeasure + "|" + r.Device + "|" + r.Peer + "|" + fmt.Sprint(r.PeerPort)
+		r.DeviceMAC = strings.ToLower(macOf(r.Device))
+		k := r.Countermeasure + "|" + r.Device + "|" + r.Peer + "|" + fmt.Sprint(r.PeerPort) + "|" + r.Domain
 		if !seen[k] {
 			seen[k] = true
 			out = append(out, r)
@@ -90,7 +116,7 @@ func Plan(events []analyzer.Event, local analyzer.LocalNetworks) []Rule {
 			// The connection came from outside to the device.
 			add(Rule{Countermeasure: BlockInbound, Device: dev, Reason: e.Type})
 		case !local.Contains(peer) && weakTypes[e.Type]:
-			add(Rule{Countermeasure: BlockWeakDestinations, Device: dev, Peer: peer, PeerPort: peerPort, Reason: e.Type})
+			add(Rule{Countermeasure: BlockWeakDestinations, Device: dev, Peer: peer, PeerPort: peerPort, Domain: domainOf(e.Evidence), Reason: e.Type})
 		case local.Contains(peer):
 			add(Rule{Countermeasure: Isolate, Device: dev, Reason: e.Type})
 		}
@@ -135,12 +161,15 @@ type Filter struct {
 	// outside the home network to a device
 	inbound map[string]bool
 	blocked map[string]bool
-	Stats   Stats
+	// names: the DNS names the capture's answers gave each address
+	names map[string]map[string]bool
+	Stats Stats
 }
 
 func NewFilter(rules []Rule, chosen []string, local analyzer.LocalNetworks, gateways []string) *Filter {
 	f := &Filter{rules: rules, chosen: map[string]bool{}, local: local, gateways: map[string]bool{},
-		inbound: map[string]bool{}, blocked: map[string]bool{}, Stats: Stats{DroppedBy: map[string]int{}}}
+		inbound: map[string]bool{}, blocked: map[string]bool{}, names: map[string]map[string]bool{},
+		Stats: Stats{DroppedBy: map[string]int{}}}
 	for _, c := range chosen {
 		f.chosen[c] = true
 	}
@@ -184,6 +213,14 @@ func (f *Filter) Copy(r io.Reader, w *pcapgo.Writer, writeHeader bool) error {
 // decide returns the countermeasure that stops the packet, or "".
 func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 	p := gopacket.NewPacket(data, lt, gopacket.DecodeOptions{Lazy: true, NoCopy: true})
+	var srcMAC, dstMAC string
+	if eth := p.Layer(layers.LayerTypeEthernet); eth != nil {
+		v := eth.(*layers.Ethernet)
+		srcMAC, dstMAC = v.SrcMAC.String(), v.DstMAC.String()
+	}
+	if d := p.Layer(layers.LayerTypeDNS); d != nil {
+		f.learnNames(d.(*layers.DNS))
+	}
 	var src, dst string
 	if ip := p.Layer(layers.LayerTypeIPv4); ip != nil {
 		v := ip.(*layers.IPv4)
@@ -212,11 +249,22 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		f.inbound[key] = !f.local.Contains(src) && f.local.Contains(dst)
 	}
 	for _, r := range f.rules {
-		if !f.chosen[r.Countermeasure] || (src != r.Device && dst != r.Device) {
+		if !f.chosen[r.Countermeasure] {
+			continue
+		}
+		// The device by MAC when the rule has one (addresses change
+		// between captures), else by address.
+		var devIsSrc, devIsDst bool
+		if r.DeviceMAC != "" {
+			devIsSrc, devIsDst = srcMAC == r.DeviceMAC && f.local.Contains(src), dstMAC == r.DeviceMAC && f.local.Contains(dst)
+		} else {
+			devIsSrc, devIsDst = src == r.Device, dst == r.Device
+		}
+		if !devIsSrc && !devIsDst {
 			continue
 		}
 		peer, peerPort := dst, dport
-		if dst == r.Device {
+		if devIsDst {
 			peer, peerPort = src, sport
 		}
 		hit := false
@@ -224,7 +272,8 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		case BlockInbound:
 			hit = f.inbound[key]
 		case BlockWeakDestinations:
-			hit = peer == r.Peer && (r.PeerPort == 0 || peerPort == r.PeerPort)
+			portOK := r.PeerPort == 0 || peerPort == r.PeerPort
+			hit = portOK && (peer == r.Peer || r.Domain != "" && f.hasName(peer, r.Domain))
 		case Isolate:
 			// Unicast to another home host that is not the gateway.
 			hit = f.local.Contains(peer) && !f.gateways[peer]
@@ -240,6 +289,38 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		}
 	}
 	return ""
+}
+
+// learnNames keeps, for each address in a DNS answer, the names that led to
+// it (the question and any CNAMEs).
+func (f *Filter) learnNames(d *layers.DNS) {
+	if !d.QR || len(d.Answers) == 0 {
+		return
+	}
+	var names []string
+	for _, q := range d.Questions {
+		names = append(names, strings.ToLower(strings.TrimSuffix(string(q.Name), ".")))
+	}
+	for _, a := range d.Answers {
+		if a.Type == layers.DNSTypeCNAME {
+			names = append(names, strings.ToLower(strings.TrimSuffix(string(a.CNAME), ".")))
+		}
+	}
+	for _, a := range d.Answers {
+		if (a.Type == layers.DNSTypeA || a.Type == layers.DNSTypeAAAA) && a.IP != nil {
+			ip := a.IP.String()
+			if f.names[ip] == nil {
+				f.names[ip] = map[string]bool{}
+			}
+			for _, n := range names {
+				f.names[ip][n] = true
+			}
+		}
+	}
+}
+
+func (f *Filter) hasName(ip, domain string) bool {
+	return f.names[ip][domain]
 }
 
 // flowID is the same for both directions of a flow.

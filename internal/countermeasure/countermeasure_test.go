@@ -72,7 +72,7 @@ func TestPlan(t *testing.T) {
 		ev("I3_UNAUTHENTICATED_STREAM_ACCESS", "high", "192.168.1.20", "198.51.100.9", 40000, "192.168.1.20", 554),
 		ev("I7_TLS_WEAK_CERTIFICATE_OBSERVED", "high", "192.168.1.20", "192.168.1.30", 40001, "192.168.1.20", 443),
 		ev("PERIODIC_COMMUNICATION_OBSERVED", "medium", "192.168.1.10", "192.168.1.10", 50003, "203.0.113.7", 443), // not a weak type
-	}, local)
+	}, local, nil)
 	want := []Rule{
 		{Countermeasure: BlockInbound, Device: "192.168.1.20", Reason: "I3_UNAUTHENTICATED_STREAM_ACCESS"},
 		{Countermeasure: BlockWeakDestinations, Device: "192.168.1.10", Peer: "203.0.113.5", PeerPort: 80, Reason: "INSECURE_HTTP_AUTH"},
@@ -129,5 +129,47 @@ func TestFilter(t *testing.T) {
 				t.Errorf("%v: dropped by %s = %d, want %d", c.chosen, k, f.Stats.DroppedBy[k], v)
 			}
 		}
+	}
+}
+
+func dnsAnswer(t *testing.T, name, ip string) []byte {
+	t.Helper()
+	eth := &layers.Ethernet{SrcMAC: net.HardwareAddr{2, 0, 0, 0, 0, 9}, DstMAC: net.HardwareAddr{2, 0, 0, 0, 0, 1}, EthernetType: layers.EthernetTypeIPv4}
+	ipl := &layers.IPv4{Version: 4, TTL: 64, Protocol: layers.IPProtocolUDP, SrcIP: net.ParseIP("192.168.1.1").To4(), DstIP: net.ParseIP("192.168.1.10").To4()}
+	udp := &layers.UDP{SrcPort: 53, DstPort: 40000}
+	if err := udp.SetNetworkLayerForChecksum(ipl); err != nil {
+		t.Fatal(err)
+	}
+	dns := &layers.DNS{ID: 1, QR: true, Questions: []layers.DNSQuestion{{Name: []byte(name), Type: layers.DNSTypeA, Class: layers.DNSClassIN}},
+		Answers: []layers.DNSResourceRecord{{Name: []byte(name), Type: layers.DNSTypeA, Class: layers.DNSClassIN, TTL: 60, IP: net.ParseIP(ip).To4()}}}
+	buf := gopacket.NewSerializeBuffer()
+	if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}, eth, ipl, udp, dns); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// A rule from one day applied to another: the device has a new address and
+// the service a new one; the MAC and the DNS name still match.
+func TestFilterOtherDay(t *testing.T) {
+	plan := Plan([]analyzer.Event{{Type: "I7_TLS_WEAK_VERSION_OBSERVED", Confidence: "high", DeviceKey: "192.168.1.50",
+		SrcIP: "192.168.1.50", SrcPort: 50000, DstIP: "203.0.113.5", DstPort: 443, Evidence: "risk_kind=deprecated_tls_version sni=api.Example.com"}},
+		local, func(string) string { return "02:00:00:00:00:01" })
+	if len(plan) != 1 || plan[0].Domain != "api.example.com" || plan[0].DeviceMAC != "02:00:00:00:00:01" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	// pkt() sends from MAC 02:00:00:00:00:01; the device is now .10.
+	frames := [][]byte{
+		dnsAnswer(t, "api.example.com", "198.51.100.77"),
+		pkt(t, "192.168.1.10", 50000, "198.51.100.77", 443, true), // same service, new address
+		pkt(t, "192.168.1.10", 50001, "198.51.100.78", 443, true), // another service
+	}
+	f := NewFilter(plan, []string{BlockWeakDestinations}, local, nil)
+	var out bytes.Buffer
+	if err := f.Copy(capture(t, frames...), pcapgo.NewWriter(&out), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(t, &out); got != 2 || f.Stats.DroppedBy[BlockWeakDestinations] != 1 {
+		t.Fatalf("kept %d, stats %+v", got, f.Stats)
 	}
 }
