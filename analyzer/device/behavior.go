@@ -24,6 +24,7 @@ func AddHTTPBehaviorHints(d *DeviceProfile, http *rules.HTTPInfo, dstPort uint16
 		path := strings.TrimSpace(http.Path)
 		if path != "" {
 			d.Paths[path] = true
+			d.noteObserved("path", path)
 			d.ObserveIdentitySignal("path", path, 0)
 			d.Evidence = appendUnique(d.Evidence, "Path="+path)
 		}

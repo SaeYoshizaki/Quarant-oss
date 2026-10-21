@@ -1,14 +1,24 @@
 package analyzer
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"sync"
+	"time"
 )
 
+// jsonlFlushInterval bounds how long a written line may wait in the buffer,
+// so that a live viewer reading the file sees it promptly. Writing every
+// line straight to the file took over half of the analysis time on busy
+// captures.
+const jsonlFlushInterval = time.Second
+
 type JSONLSink struct {
-	mu   sync.Mutex
-	file *os.File
+	mu        sync.Mutex
+	file      *os.File
+	buf       *bufio.Writer
+	lastFlush time.Time
 }
 
 func NewJSONSink(path string) (*JSONLSink, error) {
@@ -16,7 +26,7 @@ func NewJSONSink(path string) (*JSONLSink, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &JSONLSink{file: f}, nil
+	return &JSONLSink{file: f, buf: bufio.NewWriterSize(f, 256*1024), lastFlush: time.Now()}, nil
 }
 
 func (s *JSONLSink) Write(event Event) error {
@@ -45,8 +55,29 @@ func (s *JSONLSink) writeValue(v any) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.file.Write(append(data, '\n'))
-	return err
+	if _, err := s.buf.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	// Wall-clock time here only paces file I/O; it does not enter the
+	// analysis.
+	if now := time.Now(); now.Sub(s.lastFlush) >= jsonlFlushInterval {
+		s.lastFlush = now
+		return s.buf.Flush()
+	}
+	return nil
+}
+
+// Flush writes buffered lines to the file.
+func (s *JSONLSink) Flush() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file == nil {
+		return nil
+	}
+	return s.buf.Flush()
 }
 
 func (s *JSONLSink) Close() error {
@@ -55,7 +86,11 @@ func (s *JSONLSink) Close() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ferr := s.buf.Flush()
 	err := s.file.Close()
 	s.file = nil
+	if ferr != nil {
+		return ferr
+	}
 	return err
 }

@@ -73,6 +73,10 @@ type DeviceProfile struct {
 	OWASPTagCounts    map[string]int
 	LastRiskEventType string
 	LastRiskEventAt   time.Time
+
+	// observed indexes Hosts, Paths, UserAgents, Servers and SNIValues for
+	// keyword matching (observed_index.go).
+	observed map[string]*observedIndex
 }
 
 func (p *DeviceProfile) AddObservedService(service string) {

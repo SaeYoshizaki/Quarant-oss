@@ -323,29 +323,23 @@ func scoreFamilySignature(d *DeviceProfile, category string, signature knowledge
 	}
 
 	addKeywordMatches := func(kind string, observed map[string]bool, keywords []string, weight float64, strength string) {
-		for value := range observed {
-			valueLower := strings.ToLower(value)
-			for _, keyword := range keywords {
-				keyword = strings.ToLower(strings.TrimSpace(keyword))
-				if keyword == "" || !strings.Contains(valueLower, keyword) {
-					continue
-				}
-				eval.score += weight
-				eval.signalTypes[kind] = true
-				if strength == "strong" {
-					eval.strongSignalTypes[kind] = true
-				}
-				eval.reasons = appendUnique(eval.reasons, strength+" "+kind+" keyword matched: "+keyword)
-				if repeat := d.IdentitySignalRepeatCount(kind, value); repeat >= 2 {
-					eval.repeatedSignalTypes[kind] = true
-					if strength == "strong" {
-						eval.repeatedStrongTypes[kind] = true
-					}
-					eval.score += repeatedObservationScore(repeat, strength)
-					eval.reasons = appendUnique(eval.reasons, "consistent repeated observation count >= 2: "+kind)
-				}
-				return
+		value, keyword, ok := d.observedIndexFor(kind, observed).match(keywords)
+		if !ok {
+			return
+		}
+		eval.score += weight
+		eval.signalTypes[kind] = true
+		if strength == "strong" {
+			eval.strongSignalTypes[kind] = true
+		}
+		eval.reasons = appendUnique(eval.reasons, strength+" "+kind+" keyword matched: "+keyword)
+		if repeat := d.IdentitySignalRepeatCount(kind, value); repeat >= 2 {
+			eval.repeatedSignalTypes[kind] = true
+			if strength == "strong" {
+				eval.repeatedStrongTypes[kind] = true
 			}
+			eval.score += repeatedObservationScore(repeat, strength)
+			eval.reasons = appendUnique(eval.reasons, "consistent repeated observation count >= 2: "+kind)
 		}
 	}
 
@@ -535,22 +529,16 @@ func scoreVendorsFromPassiveSignals(d *DeviceProfile, legacyScores map[string]fl
 }
 
 func scoreVendorKeywords(d *DeviceProfile, vendor, kind string, observed map[string]bool, keywords []string, weight float64, strength string, add func(string, string, string, float64, bool, bool)) {
-	for value := range observed {
-		valueLower := strings.ToLower(value)
-		for _, keyword := range keywords {
-			keyword = strings.ToLower(strings.TrimSpace(keyword))
-			if keyword == "" || !strings.Contains(valueLower, keyword) {
-				continue
-			}
-			repeated := d.IdentitySignalRepeatCount(kind, value) >= 2
-			score := weight
-			if repeated {
-				score += repeatedObservationScore(d.IdentitySignalRepeatCount(kind, value), strength) * 0.5
-			}
-			add(vendor, kind, strength+" "+kind+" keyword matched: "+keyword, score, repeated, strength == "strong")
-			return
-		}
+	value, keyword, ok := d.observedIndexFor(kind, observed).match(keywords)
+	if !ok {
+		return
 	}
+	repeated := d.IdentitySignalRepeatCount(kind, value) >= 2
+	score := weight
+	if repeated {
+		score += repeatedObservationScore(d.IdentitySignalRepeatCount(kind, value), strength) * 0.5
+	}
+	add(vendor, kind, strength+" "+kind+" keyword matched: "+keyword, score, repeated, strength == "strong")
 }
 
 func vendorConfidenceLabel(score float64, distinctSignals, repeatedSignals, strongSignals, repeatedStrongSignals int, familyMatches bool, familyConfidence string) string {

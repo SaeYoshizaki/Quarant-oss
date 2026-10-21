@@ -35,18 +35,21 @@ func bestScoredLabel(scores map[string]float64, prefer string) (string, float64)
 func EnrichFromHTTP(d *DeviceProfile, headers map[string]string) {
 	if host, ok := headers["host"]; ok {
 		d.Hosts[host] = true
+		d.noteObserved("host", host)
 		d.ObserveIdentitySignal("host", host, 0)
 		d.Evidence = appendUnique(d.Evidence, "Host="+host)
 	}
 
 	if ua, ok := headers["user-agent"]; ok {
 		d.UserAgents[ua] = true
+		d.noteObserved("ua", ua)
 		d.ObserveIdentitySignal("ua", ua, 0)
 		d.Evidence = appendUnique(d.Evidence, "UA="+ua)
 	}
 
 	if srv, ok := headers["server"]; ok {
 		d.Servers[srv] = true
+		d.noteObserved("server", srv)
 		d.ObserveIdentitySignal("server", srv, 0)
 		d.Evidence = appendUnique(d.Evidence, "Server="+srv)
 	}

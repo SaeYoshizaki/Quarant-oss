@@ -18,6 +18,7 @@ func EnrichFromTLS(d *DeviceProfile, info rules.TLSClientHelloInfo) {
 
 	if info.SNI != "" {
 		d.SNIValues[info.SNI] = true
+		d.noteObserved("sni", info.SNI)
 		d.ObserveIdentitySignal("sni", info.SNI, 0)
 		d.Evidence = appendUnique(d.Evidence, "SNI="+info.SNI)
 	}
