@@ -64,6 +64,27 @@ type Row struct {
 	HasUsername    bool     `json:"has_username"`
 	HasPassword    bool     `json:"has_password"`
 	Anonymous      bool     `json:"anonymous"`
+
+	CertKeyType    string `json:"cert_key_type"`
+	CertKeyLength  int    `json:"cert_key_length"`
+	CertSigAlg     string `json:"cert_sig_alg"`
+	CertSelfSigned bool   `json:"cert_self_signed"`
+	CertExpired    bool   `json:"cert_expired"`
+	Established    bool   `json:"established"`
+
+	SSHVersion int    `json:"ssh_version"`
+	SSHKex     string `json:"ssh_kex"`
+	SSHCipher  string `json:"ssh_cipher"`
+	SSHMAC     string `json:"ssh_mac"`
+	SSHHostKey string `json:"ssh_host_key"`
+	SSHClient  string `json:"ssh_client"`
+	SSHServer  string `json:"ssh_server"`
+
+	SNMPVersion          string `json:"snmp_version"`
+	SNMPHasCommunity     bool   `json:"snmp_has_community"`
+	SNMPDefaultCommunity bool   `json:"snmp_default_community"`
+	SNMPAgent            string `json:"snmp_agent"`
+	SNMPResponses        int    `json:"snmp_responses"`
 }
 
 // RunZeek runs Zeek with evidence.zeek over pcap inside workDir and returns
@@ -170,6 +191,12 @@ func Convert(rows []Row, local analyzer.LocalNetworks) []analyzer.Event {
 					"An MQTT CONNECT with a non-empty password field was observed in cleartext (Zeek MQTT parser).",
 					"The broker password can be read by anyone on the network path."))
 			}
+		case "ssh":
+			out = append(out, sshEvents(r, local)...)
+		case "snmp":
+			if e, ok := snmpEvent(r, local); ok {
+				out = append(out, e)
+			}
 		case "ftp":
 			if r.HasPassword && !r.Anonymous {
 				out = append(out, credentialEvent(r, local, "INSECURE_FTP_CREDENTIALS", "ftp_user=*** ftp_password=***",
@@ -209,7 +236,7 @@ func baseEvent(r Row, typ, category string, sev analyzer.Severity, device string
 		RuleID:     "ZEEK_" + typ,
 		Category:   category,
 		Source:     Source,
-		FlowKey:    analyzer.TCPFlowKey(r.OrigH, r.OrigP, r.RespH, r.RespP),
+		FlowKey:    flowKey(r),
 		Basis:      analyzer.BasisObserved,
 		DeviceKey:  device,
 		SrcIP:      r.OrigH,
@@ -219,6 +246,16 @@ func baseEvent(r Row, typ, category string, sev analyzer.Severity, device string
 		OWASPTags:  []string{"I7"},
 		Confidence: "high",
 	}
+}
+
+// flowKey is Quarant's flow key; SNMP runs over UDP, which Quarant does not
+// keep flows for, so it only gets the same shape with a udp prefix.
+func flowKey(r Row) string {
+	k := analyzer.TCPFlowKey(r.OrigH, r.OrigP, r.RespH, r.RespP)
+	if r.Kind == "snmp" {
+		return "udp|" + strings.TrimPrefix(k, "tcp|")
+	}
+	return k
 }
 
 func peer(r Row) string {
@@ -271,7 +308,141 @@ func tlsEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 			break
 		}
 	}
+	if e, ok := certEvent(r, local); ok {
+		out = append(out, e)
+	}
 	return out
+}
+
+// certWeakness names what is weak about the server's leaf certificate under
+// NIST SP 800-131A Rev. 2: RSA or DSA keys under 2048 bits and EC keys under
+// 224 bits are disallowed, and so is SHA-1 (or MD5) for signature
+// generation. The signature of a self-signed certificate is not checked:
+// such a certificate is trusted by pinning, not through its signature.
+func certWeakness(r Row) []string {
+	var out []string
+	switch strings.ToLower(r.CertKeyType) {
+	case "rsa", "dsa":
+		if r.CertKeyLength > 0 && r.CertKeyLength < 2048 {
+			out = append(out, fmt.Sprintf("weak_certificate_key key=%s%d", strings.ToLower(r.CertKeyType), r.CertKeyLength))
+		}
+	case "ecdsa", "ec":
+		if r.CertKeyLength > 0 && r.CertKeyLength < 224 {
+			out = append(out, fmt.Sprintf("weak_certificate_key key=ecdsa%d", r.CertKeyLength))
+		}
+	}
+	sig := strings.ToLower(r.CertSigAlg)
+	if !r.CertSelfSigned && (strings.Contains(sig, "sha1") || strings.Contains(sig, "md5")) {
+		out = append(out, "weak_certificate_signature signature="+r.CertSigAlg)
+	}
+	return out
+}
+
+func certEvent(r Row, local analyzer.LocalNetworks) (analyzer.Event, bool) {
+	weak := certWeakness(r)
+	if len(weak) == 0 {
+		return analyzer.Event{}, false
+	}
+	e := baseEvent(r, "I7_TLS_WEAK_CERTIFICATE_OBSERVED", "I7", analyzer.SeverityWarning, deviceEnd(r, local, true))
+	kinds := make([]string, 0, len(weak))
+	for _, w := range weak {
+		kinds = append(kinds, "risk_kind="+w)
+	}
+	e.Evidence = strings.Join(kinds, " ") + fmt.Sprintf(" self_signed=%t established=%t", r.CertSelfSigned, r.Established) + suffix(r)
+	e.Message = "Server certificate with a weak key or signature (Zeek X.509 parser)."
+	e.ObservedFact = "Zeek's X.509 parser saw the server's leaf certificate in the TLS handshake with " + strings.Join(weak, " and ") + "."
+	e.Inference = "The channel's server authentication rests on cryptography that NIST SP 800-131A disallows."
+	e.Limitation = "Only the leaf certificate is examined; whether the client validated it, pinned it or ignored it is not visible. TLS 1.3 sends certificates encrypted, so they are not seen there."
+	if !r.Established {
+		e.Limitation += " The handshake was not seen to complete, so the client may have rejected the certificate."
+		e.Confidence = "medium"
+	}
+	return e, true
+}
+
+// SSH key exchange methods that RFC 9142 says SHOULD NOT or MUST NOT be
+// implemented, and ciphers that RFC 8758 (RC4) or RFC 4253 ("none") rule
+// out.
+var (
+	weakSSHKex = map[string]bool{
+		"diffie-hellman-group1-sha1": true, "diffie-hellman-group-exchange-sha1": true, "rsa1024-sha1": true,
+	}
+	weakSSHKexPrefix = []string{"gss-gex-sha1-", "gss-group1-sha1-", "gss-group14-sha1-"}
+	weakSSHCipher    = map[string]string{"arcfour": "rc4", "arcfour128": "rc4", "arcfour256": "rc4", "none": "null"}
+)
+
+func sshEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
+	var out []analyzer.Event
+	dev := deviceEnd(r, local, true)
+	sw := ""
+	if r.SSHServer != "" {
+		sw = fmt.Sprintf(" ssh_server=%q", r.SSHServer)
+	}
+	if r.SSHVersion == 1 {
+		e := baseEvent(r, "I7_SSH_WEAK_VERSION_OBSERVED", "I7", analyzer.SeverityWarning, dev)
+		e.Evidence = "risk_kind=deprecated_ssh_version ssh_version=1" + sw + suffix(r)
+		e.Message = "SSH protocol version 1 in use (Zeek SSH parser)."
+		e.ObservedFact = "Zeek's SSH parser saw an SSH session that used protocol version 1."
+		e.Inference = "SSH-1 has known design flaws and is outside current best practice."
+		e.Limitation = "The payload was not decrypted; what the session carried is not known."
+		out = append(out, e)
+	}
+	var weak []string
+	kex := strings.ToLower(r.SSHKex)
+	if weakSSHKex[kex] {
+		weak = append(weak, "weak_ssh_kex kex="+r.SSHKex)
+	} else {
+		for _, p := range weakSSHKexPrefix {
+			if strings.HasPrefix(kex, p) {
+				weak = append(weak, "weak_ssh_kex kex="+r.SSHKex)
+				break
+			}
+		}
+	}
+	if k, ok := weakSSHCipher[strings.ToLower(r.SSHCipher)]; ok {
+		weak = append(weak, k+"_cipher cipher="+r.SSHCipher)
+	}
+	if len(weak) > 0 {
+		e := baseEvent(r, "I7_SSH_WEAK_ALGORITHM_SELECTED", "I7", analyzer.SeverityWarning, dev)
+		kinds := make([]string, 0, len(weak))
+		for _, w := range weak {
+			kinds = append(kinds, "risk_kind="+w)
+		}
+		e.Evidence = strings.Join(kinds, " ") + sw + suffix(r)
+		e.Message = "SSH session negotiated a deprecated algorithm (Zeek SSH parser)."
+		e.ObservedFact = "Zeek's SSH parser saw the session negotiate " + strings.Join(weak, " and ") + "."
+		e.Inference = "Both ends accept an algorithm that RFC 9142 or RFC 8758 rules out; the server offers it."
+		e.Limitation = "The negotiated algorithm is the first one both sides support; stronger ones may also be enabled on the server. The payload was not decrypted."
+		out = append(out, e)
+	}
+	return out
+}
+
+// snmpEvent reports SNMP v1/v2c only when an agent answered: a request
+// nobody answers (discovery, a scanner) shows nothing about any device. The
+// agent is the device; its community travelled in cleartext and was
+// accepted.
+func snmpEvent(r Row, local analyzer.LocalNetworks) (analyzer.Event, bool) {
+	if !r.SNMPHasCommunity || r.SNMPResponses == 0 || r.SNMPAgent == "" || !local.Contains(r.SNMPAgent) {
+		return analyzer.Event{}, false
+	}
+	if r.SNMPDefaultCommunity {
+		e := baseEvent(r, "INSECURE_SNMP_DEFAULT_COMMUNITY", "I1", analyzer.SeverityCritical, r.SNMPAgent)
+		e.Evidence = fmt.Sprintf("snmp_default_community=*** snmp_version=%s responses=%d", r.SNMPVersion, r.SNMPResponses) + suffix(r)
+		e.Message = "SNMP agent answered a well-known default community (Zeek SNMP parser)."
+		e.ObservedFact = "An SNMP agent sent GetResponse to a request whose community equals a well-known default (public or private; compared in memory, not stored)."
+		e.Inference = "The agent accepts a universal default credential that anyone on the network can use."
+		e.Limitation = "Whether the community also allows writes, and whether the user could have changed it, is not known. Only v1/v2c communities are examined."
+		e.OWASPTags = []string{"I1", "I9"}
+		return e, true
+	}
+	e := baseEvent(r, "INSECURE_SNMP_COMMUNITY", "I7", analyzer.SeverityCritical, r.SNMPAgent)
+	e.Evidence = fmt.Sprintf("snmp_community=*** snmp_version=%s responses=%d", r.SNMPVersion, r.SNMPResponses) + suffix(r)
+	e.Message = "SNMP community sent in cleartext and accepted (Zeek SNMP parser)."
+	e.ObservedFact = "An SNMP v1/v2c agent answered a request carrying a community, which travels in cleartext."
+	e.Inference = "The community works as a password and can be read by anyone on the network path."
+	e.Limitation = "The value was not examined; what the community allows is not known."
+	return e, true
 }
 
 func clientMax(cv string) string {

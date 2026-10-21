@@ -9,12 +9,13 @@
     "INSECURE_HTTP_AUTH",
     "INSECURE_TELNET_CREDENTIALS",
     "INSECURE_MQTT_CREDENTIALS",
-    "INSECURE_FTP_CREDENTIALS"
+    "INSECURE_FTP_CREDENTIALS",
+    "INSECURE_SNMP_DEFAULT_COMMUNITY"
    ],
    "status": "candidate_only",
    "gap": "Values are masked by design; no comparison against published default-credential lists.",
-   "require_pattern": "Authorization: Basic|telnet_password|mqtt_password|password",
-   "audit": "Tokens are not passwords; only password-bearing evidence counts."
+   "require_pattern": "Authorization: Basic|telnet_password|mqtt_password|password|snmp_default_community",
+   "audit": "Tokens are not passwords; only password-bearing evidence counts. 2026-10-21 (D27): added from the Zeek path; awaiting the user's review of the mapping. An SNMP agent answering public/private (compared in memory) is direct evidence of a universal default credential being accepted."
   },
   {
    "provision": "5.1-2",
@@ -24,11 +25,13 @@
     "INSECURE_HTTP_AUTH",
     "INSECURE_TELNET_CREDENTIALS",
     "INSECURE_MQTT_CREDENTIALS",
-    "INSECURE_FTP_CREDENTIALS"
+    "INSECURE_FTP_CREDENTIALS",
+    "INSECURE_SNMP_DEFAULT_COMMUNITY"
    ],
    "status": "candidate_only",
    "gap": "Same as 5.1-1; password strength is not assessed.",
-   "require_pattern": "Authorization: Basic|telnet_password|mqtt_password|password"
+   "require_pattern": "Authorization: Basic|telnet_password|mqtt_password|password|snmp_default_community",
+   "audit": "2026-10-21 (D27): added from the Zeek path; awaiting the user's review of the mapping. An SNMP agent answering public/private (compared in memory) is direct evidence of a universal default credential being accepted."
   },
   {
    "provision": "5.1-2A",
@@ -50,12 +53,15 @@
    "violation_evidence": "Authentication runs over cryptography outside the best-practice catalogue (e.g. TLS 1.0/1.1, weak suites selected).",
    "signals": [
     "I7_TLS_WEAK_VERSION_OBSERVED",
-    "I7_TLS_WEAK_CIPHER_SELECTED"
+    "I7_TLS_WEAK_CIPHER_SELECTED",
+    "I7_TLS_WEAK_CERTIFICATE_OBSERVED",
+    "I7_SSH_WEAK_VERSION_OBSERVED",
+    "I7_SSH_WEAK_ALGORITHM_SELECTED"
    ],
    "status": "implemented",
    "assumption": "the weak channel carries authentication",
-   "require_pattern": "risk_kind=deprecated_tls_version|risk_kind=(rc4|3des|des|null|export|anonymous|md5)_cipher",
-   "audit": "E4 sample: weak version 15/15 correct; all 15 'weak cipher selected' were CBC suites, which are not violation evidence by themselves, so only broken suites count. E6 (CIC 2022 power-on): 4/4 devices correct. Nest Cam, Netatmo camera and Hue bridge offered at most TLS 1.0 themselves; Echo Spot offered TLS 1.2 and a video-service server selected TLS 1.0. E11/E12: two 2016 misses fixed: a camera serving TLS that chose TLS 1.0 for a phone offering 1.2 (finding now goes to the server), and a blood-pressure meter on port 8777 whose first segment held only the record header."
+   "require_pattern": "risk_kind=deprecated_tls_version|risk_kind=(rc4|3des|des|null|export|anonymous|md5)_cipher|risk_kind=weak_certificate_(key|signature)|risk_kind=deprecated_ssh_version|risk_kind=weak_ssh_kex",
+   "audit": "E4 sample: weak version 15/15 correct; all 15 'weak cipher selected' were CBC suites, which are not violation evidence by themselves, so only broken suites count. E6 (CIC 2022 power-on): 4/4 devices correct. Nest Cam, Netatmo camera and Hue bridge offered at most TLS 1.0 themselves; Echo Spot offered TLS 1.2 and a video-service server selected TLS 1.0. E11/E12: two 2016 misses fixed: a camera serving TLS that chose TLS 1.0 for a phone offering 1.2 (finding now goes to the server), and a blood-pressure meter on port 8777 whose first segment held only the record header. 2026-10-21 (D27): added from the Zeek path; awaiting the user's review of the mapping. Certificates: leaf key under NIST SP 800-131A minimums or SHA-1/MD5 signature (not for self-signed). SSH: SSH-1, RFC 9142 SHOULD NOT/MUST NOT key exchange, RC4 (RFC 8758) or none cipher."
   },
   {
    "provision": "5.1-5",
@@ -112,11 +118,14 @@
    "violation_evidence": "Any communication uses cryptography outside the best-practice catalogue.",
    "signals": [
     "I7_TLS_WEAK_VERSION_OBSERVED",
-    "I7_TLS_WEAK_CIPHER_SELECTED"
+    "I7_TLS_WEAK_CIPHER_SELECTED",
+    "I7_TLS_WEAK_CERTIFICATE_OBSERVED",
+    "I7_SSH_WEAK_VERSION_OBSERVED",
+    "I7_SSH_WEAK_ALGORITHM_SELECTED"
    ],
    "status": "implemented",
-   "require_pattern": "risk_kind=deprecated_tls_version|risk_kind=(rc4|3des|des|null|export|anonymous|md5)_cipher",
-   "audit": "E4 sample: weak version 15/15 correct; all 15 'weak cipher selected' were CBC suites, which are not violation evidence by themselves, so only broken suites count. E6 (CIC 2022 power-on): 4/4 devices correct. Nest Cam, Netatmo camera and Hue bridge offered at most TLS 1.0 themselves; Echo Spot offered TLS 1.2 and a video-service server selected TLS 1.0. E11/E12: two 2016 misses fixed: a camera serving TLS that chose TLS 1.0 for a phone offering 1.2 (finding now goes to the server), and a blood-pressure meter on port 8777 whose first segment held only the record header."
+   "require_pattern": "risk_kind=deprecated_tls_version|risk_kind=(rc4|3des|des|null|export|anonymous|md5)_cipher|risk_kind=weak_certificate_(key|signature)|risk_kind=deprecated_ssh_version|risk_kind=weak_ssh_kex",
+   "audit": "E4 sample: weak version 15/15 correct; all 15 'weak cipher selected' were CBC suites, which are not violation evidence by themselves, so only broken suites count. E6 (CIC 2022 power-on): 4/4 devices correct. Nest Cam, Netatmo camera and Hue bridge offered at most TLS 1.0 themselves; Echo Spot offered TLS 1.2 and a video-service server selected TLS 1.0. E11/E12: two 2016 misses fixed: a camera serving TLS that chose TLS 1.0 for a phone offering 1.2 (finding now goes to the server), and a blood-pressure meter on port 8777 whose first segment held only the record header. 2026-10-21 (D27): added from the Zeek path; awaiting the user's review of the mapping. Certificates: leaf key under NIST SP 800-131A minimums or SHA-1/MD5 signature (not for self-signed). SSH: SSH-1, RFC 9142 SHOULD NOT/MUST NOT key exchange, RC4 (RFC 8758) or none cipher."
   },
   {
    "provision": "5.5-4",
@@ -153,11 +162,13 @@
     "INSECURE_HTTP_BODY_SECRET",
     "INSECURE_UDP_CREDENTIALS",
     "INSECURE_FTP_CREDENTIALS",
-    "INSECURE_HTTP_RESPONSE_SECRET"
+    "INSECURE_HTTP_RESPONSE_SECRET",
+    "INSECURE_SNMP_DEFAULT_COMMUNITY",
+    "INSECURE_SNMP_COMMUNITY"
    ],
    "status": "implemented",
    "exclude_pattern": "^sid=|^(serial|device_id)=|Authorization: (Digest|AWS4-HMAC-SHA256|AWS|OSS|WSSE) ",
-   "audit": "E4 sample: HTTP auth/token headers 15/15 and session IDs in URLs 4/4 correct; 4/4 'token' events were device serial numbers (identifiers, not CSPs) and are excluded; cookies may be non-session (probable). IoT-23: a Philips Hue sent Authorization headers and auth= URL parameters in cleartext to its cloud (correct). E6 (CIC 2022 power-on): Hue bridge (Authorization headers, auth= in URL) and Home Eye camera (Authorization header) to cloud over HTTP, both correct. E8 (CIC 2022 interactions/scenarios): Hue bridge again (correct); a Sonos One sent sid= in cleartext URLs to opml.radiotime.com (TuneIn radio session ID; whether it is a critical security parameter is unclear, undecided). E9 (CIC 2022 active): SimCam's Authorization headers to S3 were AWS SigV4 signatures (per-request, not reusable), now named in the evidence and excluded; the same requests uploaded JPEG snapshots in cleartext, which is 5.8-1 evidence Quarant does not yet detect. E11 (miss measurement): INSECURE_HTTP_BODY_SECRET was missing from this list; across all data its IoT events outside the serial=/device_id= exclusion were Withings sessionid= (4 devices) and an iHome evrythng.api_key= (all correct), so it is now included. INSECURE_MQTT_PAYLOAD_SECRET and INSECURE_TELNET_PAYLOAD_SECRET never occurred and stay out (unaudited). Home Eye's Authorization was an Alibaba OSS per-request signature (false positive); OSS and WSSE are now named in the evidence and excluded like AWS SigV4. E14 (YourThings 2018, unseen devices): two misses, a VeraLite hub logging into an external FTP server in cleartext and a Harmony Hub receiving an API key in a cleartext HTTP response; INSECURE_FTP_CREDENTIALS and INSECURE_HTTP_RESPONSE_SECRET were added afterwards."
+   "audit": "E4 sample: HTTP auth/token headers 15/15 and session IDs in URLs 4/4 correct; 4/4 'token' events were device serial numbers (identifiers, not CSPs) and are excluded; cookies may be non-session (probable). IoT-23: a Philips Hue sent Authorization headers and auth= URL parameters in cleartext to its cloud (correct). E6 (CIC 2022 power-on): Hue bridge (Authorization headers, auth= in URL) and Home Eye camera (Authorization header) to cloud over HTTP, both correct. E8 (CIC 2022 interactions/scenarios): Hue bridge again (correct); a Sonos One sent sid= in cleartext URLs to opml.radiotime.com (TuneIn radio session ID; whether it is a critical security parameter is unclear, undecided). E9 (CIC 2022 active): SimCam's Authorization headers to S3 were AWS SigV4 signatures (per-request, not reusable), now named in the evidence and excluded; the same requests uploaded JPEG snapshots in cleartext, which is 5.8-1 evidence Quarant does not yet detect. E11 (miss measurement): INSECURE_HTTP_BODY_SECRET was missing from this list; across all data its IoT events outside the serial=/device_id= exclusion were Withings sessionid= (4 devices) and an iHome evrythng.api_key= (all correct), so it is now included. INSECURE_MQTT_PAYLOAD_SECRET and INSECURE_TELNET_PAYLOAD_SECRET never occurred and stay out (unaudited). Home Eye's Authorization was an Alibaba OSS per-request signature (false positive); OSS and WSSE are now named in the evidence and excluded like AWS SigV4. E14 (YourThings 2018, unseen devices): two misses, a VeraLite hub logging into an external FTP server in cleartext and a Harmony Hub receiving an API key in a cleartext HTTP response; INSECURE_FTP_CREDENTIALS and INSECURE_HTTP_RESPONSE_SECRET were added afterwards. 2026-10-21 (D27): added from the Zeek path; awaiting the user's review of the mapping. SNMP v1/v2c communities accepted by an agent travel in cleartext."
   },
   {
    "provision": "5.5-7",
@@ -171,11 +182,14 @@
     "INSECURE_HTTP_BODY_SECRET",
     "INSECURE_UDP_CREDENTIALS",
     "INSECURE_FTP_CREDENTIALS",
-    "INSECURE_HTTP_RESPONSE_SECRET"
+    "INSECURE_HTTP_RESPONSE_SECRET",
+    "INSECURE_SNMP_DEFAULT_COMMUNITY",
+    "INSECURE_SNMP_COMMUNITY"
    ],
    "filter": "peer is external (the source or the destination is a public address)",
    "status": "implemented",
-   "exclude_pattern": "^sid=|^(serial|device_id)=|Authorization: (Digest|AWS4-HMAC-SHA256|AWS|OSS|WSSE) "
+   "exclude_pattern": "^sid=|^(serial|device_id)=|Authorization: (Digest|AWS4-HMAC-SHA256|AWS|OSS|WSSE) ",
+   "audit": "2026-10-21 (D27): added from the Zeek path; awaiting the user's review of the mapping. SNMP v1/v2c communities accepted by an agent travel in cleartext."
   },
   {
    "provision": "5.6-2",

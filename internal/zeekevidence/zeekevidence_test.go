@@ -232,3 +232,111 @@ func TestRunZeekSynthetic(t *testing.T) {
 		}
 	}
 }
+
+func TestCertificate(t *testing.T) {
+	r := row("tls")
+	r.RespP = 443
+	r.Version = "TLSv12"
+	r.CertKeyType, r.CertKeyLength, r.CertSigAlg, r.Established = "rsa", 1024, "sha1WithRSAEncryption", true
+	evs := Convert([]Row{r}, local)
+	if len(evs) != 1 || evs[0].Type != "I7_TLS_WEAK_CERTIFICATE_OBSERVED" ||
+		!strings.Contains(evs[0].Evidence, "risk_kind=weak_certificate_key key=rsa1024 risk_kind=weak_certificate_signature signature=sha1WithRSAEncryption") ||
+		evs[0].Confidence != "high" {
+		t.Fatalf("weak cert: %+v", evs)
+	}
+	// A self-signed certificate is trusted by pinning: its signature does
+	// not matter, its key does.
+	r.CertSelfSigned = true
+	r.CertKeyLength = 2048
+	if evs := Convert([]Row{r}, local); len(evs) != 0 {
+		t.Fatalf("self-signed SHA-1 with a 2048-bit key: %v", types(evs))
+	}
+	r.CertKeyType, r.CertKeyLength, r.CertSelfSigned, r.Established = "ecdsa", 256, false, false
+	r.CertSigAlg = "ecdsa-with-SHA256"
+	if evs := Convert([]Row{r}, local); len(evs) != 0 {
+		t.Fatalf("strong cert: %v", types(evs))
+	}
+	r.CertKeyType, r.CertKeyLength = "rsa", 512
+	evs = Convert([]Row{r}, local)
+	if len(evs) != 1 || evs[0].Confidence != "medium" {
+		t.Fatalf("handshake not completed should lower confidence: %+v", evs)
+	}
+}
+
+func TestSSH(t *testing.T) {
+	r := row("ssh")
+	r.RespP = 22
+	r.RespH = "192.168.1.20"
+	r.SSHVersion = 2
+	r.SSHKex, r.SSHCipher, r.SSHServer = "diffie-hellman-group14-sha1", "aes128-cbc", "SSH-2.0-dropbear_0.53.1"
+	// group14-sha1 is MAY in RFC 9142; CBC is not ruled out.
+	if evs := Convert([]Row{r}, local); len(evs) != 0 {
+		t.Fatalf("acceptable SSH: %v", types(evs))
+	}
+	r.SSHKex, r.SSHCipher = "diffie-hellman-group1-sha1", "arcfour128"
+	evs := Convert([]Row{r}, local)
+	if len(evs) != 1 || evs[0].Type != "I7_SSH_WEAK_ALGORITHM_SELECTED" || evs[0].DeviceKey != "192.168.1.20" ||
+		!strings.Contains(evs[0].Evidence, "risk_kind=weak_ssh_kex kex=diffie-hellman-group1-sha1 risk_kind=rc4_cipher cipher=arcfour128") ||
+		!strings.Contains(evs[0].Evidence, `ssh_server="SSH-2.0-dropbear_0.53.1"`) {
+		t.Fatalf("weak SSH: %+v", evs)
+	}
+	r.SSHVersion, r.SSHKex, r.SSHCipher = 1, "", ""
+	if evs := Convert([]Row{r}, local); len(evs) != 1 || evs[0].Type != "I7_SSH_WEAK_VERSION_OBSERVED" {
+		t.Fatalf("SSH-1: %v", types(evs))
+	}
+}
+
+func TestSNMP(t *testing.T) {
+	r := row("snmp")
+	r.RespP = 161
+	r.RespH = "192.168.1.20"
+	r.SNMPVersion, r.SNMPHasCommunity, r.SNMPDefaultCommunity = "2c", true, true
+	// Nobody answered (discovery or a scanner): nothing about any device.
+	if evs := Convert([]Row{r}, local); len(evs) != 0 {
+		t.Fatalf("unanswered: %v", types(evs))
+	}
+	r.SNMPResponses, r.SNMPAgent = 3, "192.168.1.20"
+	evs := Convert([]Row{r}, local)
+	if len(evs) != 1 || evs[0].Type != "INSECURE_SNMP_DEFAULT_COMMUNITY" || evs[0].DeviceKey != "192.168.1.20" ||
+		!strings.HasPrefix(evs[0].FlowKey, "udp|") || !strings.Contains(evs[0].Evidence, "snmp_default_community=***") {
+		t.Fatalf("default community: %+v", evs)
+	}
+	r.SNMPDefaultCommunity = false
+	if evs := Convert([]Row{r}, local); len(evs) != 1 || evs[0].Type != "INSECURE_SNMP_COMMUNITY" {
+		t.Fatalf("community: %v", types(evs))
+	}
+	// An agent outside the home network is not a device.
+	r.SNMPAgent = "203.0.113.9"
+	if evs := Convert([]Row{r}, local); len(evs) != 0 {
+		t.Fatalf("remote agent: %v", types(evs))
+	}
+}
+
+// Runs Zeek on a synthetic SNMP exchange (testdata/mk_snmp_pcap.py) where an
+// agent answers the community "public".
+func TestRunZeekSNMP(t *testing.T) {
+	if _, err := exec.LookPath("zeek"); err != nil {
+		t.Skip("zeek not installed")
+	}
+	log, err := RunZeek(context.Background(), "", filepath.Join("testdata", "snmp-public.pcap"), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	rows, err := ReadRows(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := Convert(rows, local)
+	if len(evs) != 1 || evs[0].Type != "INSECURE_SNMP_DEFAULT_COMMUNITY" || evs[0].DeviceKey != "192.168.1.20" {
+		t.Fatalf("got %+v", evs)
+	}
+	raw, _ := os.ReadFile(log)
+	if strings.Contains(string(raw), "public") {
+		t.Errorf("the community value reached the log")
+	}
+}

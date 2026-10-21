@@ -1247,3 +1247,25 @@ python3 scripts/accuracy/compare_misses.py docs/assessment/evidence-map.json ~/d
 - Quarant にないものは、外から届くサービスの 2 台。SmartCam は、SNMP v1/v2c が community の違う要求に応答しないことから、初期の community `public` を受け付けていたと読める（5.1-1 の候補）。HS110 は、操作用のポートが外から届いていた。
 
 **限界**：S2 の古い出力（Quarant は `runs-fix4`）。UNSW 2018 は攻撃を流した実験環境で、外から届く経路は実験のための設定かもしれない。CIC IoT 2022 と YourThings では Suricata を回していない。
+
+## O4：Zeek 経由の証明書、SSH、SNMP（YourThings 2018-03-20、2026-10-21）
+
+**目的**：D27 で加えた検出が、実際の通信で何を出すかを見る。
+
+**方法**：YourThings の 3/20（288 ファイル、15GB）を `evidence.zeek` で解析し（8 並列で約 70 秒）、`quarant zeek evidence --log` で変換した。結果は `~/datasets/oss-work/yt0320/`。機器の名前は YourThings の MAC の一覧から付けた。IoT ではない機器（検査用のツール `192.168.0.200` など）は除いた。
+
+**結果**
+
+| 検出 | 機器 | 役割 | 中身 |
+|---|---|---|---|
+| 弱い証明書 | Wink 2 Hub、Sonos、D-Link DCS-5009L カメラ | サーバー（LAN 内から接続された） | RSA 1024 ビット |
+| 弱い証明書 | SmartThings Hub | サーバー | SHA-1 の署名 |
+| 弱い証明書 | SmartThings Hub | クライアント（クラウドへ） | 接続先の証明書が RSA 1024 ビットで SHA-1 |
+| 弱い証明書 | Samsung Smart TV、Nest カメラ、Roku 4、Roku TV、August ドアベル、LIFX | クライアント | 接続先の証明書が SHA-1 の署名 |
+| 弱い SSH | MiCasaVerde VeraLite | クライアント（メーカーのクラウドの 232 番） | 鍵交換 `diffie-hellman-group1-sha1`（RFC 9142 で SHOULD NOT） |
+| SNMP | なし | — | 要求 4,877 件はすべて検査用のツールからで、応答した機器はなかった |
+
+- 合わせて 11 台に、Quarant 単体では出せなかった種類の証拠が出た。
+- サーバー側の証拠の多くは、検査用のツールの接続で見えたもの。家庭では、アプリからの接続で同じものが見える。
+
+**限界**：3/20 の Quarant 単体の解析結果が手元にないので、機器ごとの比較（ほかの証拠ですでに 5.5-1 に数えられていた機器か）はまだ。2018 年のデータなので、SHA-1 の証明書は当時まだ使われていた時期にあたる。基準は今の規格の読み方による。

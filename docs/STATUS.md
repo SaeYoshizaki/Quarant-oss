@@ -102,6 +102,9 @@
    - S2 の出力で試した（O3）：Quarant にないものは、外から届くサービスの 2 台（Samsung SmartCam の SNMP `public`、HS110 の 9999 番）。乗っ取られた機器（IoT-23 3-1）は Quarant も振る舞いで捉えていて、Suricata はマルウェアの種類を加えた。
    - 規格の要件には対応づけず、第 2 弾の対策（遮断・隔離）の材料として別に扱う（利用者と合意）。
    - 残り：CIC IoT 2022 と YourThings で Suricata を回す。
+- **OSS を広げる（2026-10-21〜）**：順番は Zeek を広げる → Suricata を CIC・YourThings で回す → Mercury（Cisco） → nDPI → Snort 3（任意）。
+  - Zeek に証明書、SSH、SNMP を加えた（D27、O4）。YourThings 3/20 で 11 台に新しい種類の証拠。要件への対応づけ（evidence-map）は利用者の確認待ち。
+  - 次：DTLS、ソフトウェアの版の抽出（5.2-2、5.6-2）。解析の遅さ（既知の問題 10）は、全データの解析し直しの直前に直す。
 4. 今の Quarant だけの場合と比べる。注意：Zeek を組み込むと、Zeek を見逃しの正解に使えない。会議までは、生パケットの検索と、判定済みの YourThings の候補を正解にし、その限界を書く。
 - まだ決めていないこと：会議の日程（どこまで作るか）。
 

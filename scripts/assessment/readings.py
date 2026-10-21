@@ -21,7 +21,7 @@ def strict(m):
     for p in m["provisions"]:
         v = p["provision"]
         if v in ("5.1-3", "5.5-1"):                      # T5: CBC suites count
-            p["require_pattern"] = WEAK_TLS + "|risk_kind=cbc_cipher"
+            p["require_pattern"] = p.get("require_pattern", WEAK_TLS) + "|risk_kind=cbc_cipher"
         if v in ("5.5-6", "5.5-7"):                      # S3, S4, S6, S8: no exclusions
             p.pop("exclude_pattern", None)
         if v == "5.5-6" and "I1_CREDENTIAL_GUESSING_OBSERVED" not in p["signals"]:

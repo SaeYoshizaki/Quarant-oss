@@ -1,12 +1,13 @@
-# Zeek side of `quarant zeek evidence`. Zeek parses HTTP, TLS, MQTT and FTP
-# (found by content, so the port does not matter) and this script writes one
-# row per TLS session, HTTP request, MQTT CONNECT and FTP login to
-# quarant_evidence.log. Quarant turns the rows into evidence for the ETSI
+# Zeek side of `quarant zeek evidence`. Zeek parses HTTP, TLS, MQTT, FTP,
+# SSH and SNMP (found by content, so the port does not matter) and this
+# script writes one row per TLS session, HTTP request, MQTT CONNECT, FTP
+# login, SSH session and SNMP exchange to quarant_evidence.log. Quarant turns the rows into evidence for the ETSI
 # provisions (internal/zeekevidence).
 #
 # Only names and shapes are logged, never values: header names, URL
 # parameter names, body key names, the Authorization scheme, and whether a
-# username or password was present. Every other Zeek log is disabled, so
+# username or password was present, and whether an SNMP community equals a
+# well-known default (compared in memory). Every other Zeek log is disabled, so
 # URLs, cookies and FTP arguments are not written to disk at all.
 #
 # Derived from scripts/accuracy/gt.zeek (the ground truth of E11-E14); that
@@ -16,6 +17,9 @@
 @load base/protocols/ssl
 @load base/protocols/mqtt
 @load base/protocols/ftp
+@load base/protocols/ssh
+@load base/protocols/snmp
+@load base/files/x509
 
 module QuarantEvidence;
 
@@ -47,10 +51,32 @@ export {
 		resp_body_keys: set[string] &log &optional;
 		orig_mime: vector of string &log &optional;
 		req_body_len: count &log &optional;
+		# TLS: the server's leaf certificate (not sent in clear in TLS 1.3)
+		cert_key_type: string &log &optional;
+		cert_key_length: count &log &optional;
+		cert_sig_alg: string &log &optional;
+		cert_self_signed: bool &log &optional;
+		cert_expired: bool &log &optional;
+		established: bool &log &optional;
 		# MQTT / FTP
 		has_username: bool &log &optional;
 		has_password: bool &log &optional;
 		anonymous: bool &log &optional;
+		# SSH: the negotiated algorithms and the software banners
+		ssh_version: count &log &optional;
+		ssh_kex: string &log &optional;
+		ssh_cipher: string &log &optional;
+		ssh_mac: string &log &optional;
+		ssh_host_key: string &log &optional;
+		ssh_client: string &log &optional;
+		ssh_server: string &log &optional;
+		# SNMP v1/v2c: the community itself is never logged
+		snmp_version: string &log &optional;
+		snmp_has_community: bool &log &optional;
+		snmp_default_community: bool &log &optional;
+		# The address that answered (the agent), when a response was seen
+		snmp_agent: addr &log &optional;
+		snmp_responses: count &log &optional;
 	};
 }
 
@@ -62,6 +88,10 @@ const secret_name = /(^|[_.\[-])(pass|pwd|token|secret|api[_-]?key|apikey|auth|s
 const key_pat = /[\"']?[A-Za-z0-9_\-\.]{1,40}[\"']?[ \t]*[:=]/;
 const param_name = /^[A-Za-z0-9_\-\.\[\]]{1,40}$/;
 
+# SNMP communities that ship as defaults on most agents (RFC 1157 examples,
+# vendor defaults). Compared in memory; the community is not logged.
+const default_communities = set("public", "private");
+
 redef record HTTP::Info += {
 	qe_req_headers: set[string] &default=set();
 	qe_auth: string &optional;
@@ -72,6 +102,17 @@ redef record HTTP::Info += {
 	qe_resp_seen: count &default=0;
 	qe_orig_mac: string &optional;
 	qe_resp_mac: string &optional;
+};
+
+redef record SSH::Info += {
+	qe_orig_mac: string &optional;
+	qe_resp_mac: string &optional;
+};
+
+redef record SNMP::Info += {
+	qe_orig_mac: string &optional;
+	qe_resp_mac: string &optional;
+	qe_agent: addr &optional;
 };
 
 redef record SSL::Info += {
@@ -227,6 +268,62 @@ event SSL::log_ssl(rec: SSL::Info)
 	if ( rec?$cipher ) r$cipher = rec$cipher;
 	if ( rec?$qe_client_versions ) r$client_versions = rec$qe_client_versions;
 	if ( rec?$server_name ) r$sni = rec$server_name;
+	r$established = rec$established;
+	if ( rec?$cert_chain && |rec$cert_chain| > 0 && rec$cert_chain[0]?$x509 )
+		{
+		local cert = rec$cert_chain[0]$x509$certificate;
+		if ( cert?$key_type ) r$cert_key_type = cert$key_type;
+		if ( cert?$key_length ) r$cert_key_length = cert$key_length;
+		r$cert_sig_alg = cert$sig_alg;
+		r$cert_self_signed = cert$subject == cert$issuer;
+		r$cert_expired = cert$not_valid_after < rec$ts || cert$not_valid_before > rec$ts;
+		}
+	Log::write(QuarantEvidence::LOG, r);
+	}
+
+event ssh_server_version(c: connection, version: string) &priority=-5
+	{
+	if ( ! c?$ssh ) return;
+	if ( c$orig?$l2_addr ) c$ssh$qe_orig_mac = c$orig$l2_addr;
+	if ( c$resp?$l2_addr ) c$ssh$qe_resp_mac = c$resp$l2_addr;
+	}
+
+event SSH::log_ssh(rec: SSH::Info)
+	{
+	local r = from_rec(rec$id, rec$uid, rec$ts, "ssh", rec?$qe_orig_mac ? rec$qe_orig_mac : "", rec?$qe_resp_mac ? rec$qe_resp_mac : "");
+	if ( rec?$version ) r$ssh_version = rec$version;
+	if ( rec?$kex_alg ) r$ssh_kex = rec$kex_alg;
+	if ( rec?$cipher_alg ) r$ssh_cipher = rec$cipher_alg;
+	if ( rec?$mac_alg ) r$ssh_mac = rec$mac_alg;
+	if ( rec?$host_key_alg ) r$ssh_host_key = rec$host_key_alg;
+	if ( rec?$client ) r$ssh_client = rec$client;
+	if ( rec?$server ) r$ssh_server = rec$server;
+	Log::write(QuarantEvidence::LOG, r);
+	}
+
+# A GetResponse comes from the agent; to a broadcast request it arrives on a
+# connection of its own, where the agent is the originator.
+event snmp_response(c: connection, is_orig: bool, header: SNMP::Header, pdu: SNMP::PDU) &priority=-5
+	{
+	if ( ! c?$snmp ) return;
+	c$snmp$qe_agent = is_orig ? c$id$orig_h : c$id$resp_h;
+	}
+
+event connection_state_remove(c: connection) &priority=10
+	{
+	if ( ! c?$snmp ) return;
+	if ( c$orig?$l2_addr ) c$snmp$qe_orig_mac = c$orig$l2_addr;
+	if ( c$resp?$l2_addr ) c$snmp$qe_resp_mac = c$resp$l2_addr;
+	}
+
+event SNMP::log_snmp(rec: SNMP::Info)
+	{
+	local r = from_rec(rec$id, rec$uid, rec$ts, "snmp", rec?$qe_orig_mac ? rec$qe_orig_mac : "", rec?$qe_resp_mac ? rec$qe_resp_mac : "");
+	r$snmp_version = rec$version;
+	r$snmp_has_community = rec?$community && rec$community != "";
+	r$snmp_default_community = rec?$community && to_lower(rec$community) in default_communities;
+	if ( rec?$qe_agent ) r$snmp_agent = rec$qe_agent;
+	r$snmp_responses = rec$get_responses;
 	Log::write(QuarantEvidence::LOG, r);
 	}
 
