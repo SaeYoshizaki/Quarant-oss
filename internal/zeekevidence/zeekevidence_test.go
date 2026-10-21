@@ -318,7 +318,15 @@ func TestRunZeekSNMP(t *testing.T) {
 	if _, err := exec.LookPath("zeek"); err != nil {
 		t.Skip("zeek not installed")
 	}
-	log, err := RunZeek(context.Background(), "", filepath.Join("testdata", "snmp-public.pcap"), t.TempDir())
+	// PCAPs are not kept in git, so the capture is built here.
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+	pcap := filepath.Join(t.TempDir(), "snmp-public.pcap")
+	if out, err := exec.Command("python3", "-I", filepath.Join("testdata", "mk_snmp_pcap.py"), pcap).CombinedOutput(); err != nil {
+		t.Fatalf("build pcap: %v: %s", err, out)
+	}
+	log, err := RunZeek(context.Background(), "", pcap, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
