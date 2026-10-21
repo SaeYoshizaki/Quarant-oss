@@ -397,3 +397,33 @@ func TestSoftware(t *testing.T) {
 		t.Errorf("duplicates: %v", types(evs))
 	}
 }
+
+// Credentials sent to a device count only if the device accepted them; a
+// scanner's or brute-forcer's guesses are refused.
+func TestCredentialsToDevice(t *testing.T) {
+	r := row("http")
+	r.RespH = "192.168.1.20"
+	r.AuthScheme = "basic"
+	r.ReqHeaders = []string{"cookie"}
+	for _, c := range []struct {
+		status int
+		want   string
+	}{{401, "low"}, {0, "low"}, {200, "high"}} {
+		r.Status = c.status
+		for _, e := range Convert([]Row{r}, local) {
+			if e.Type == "INSECURE_HTTP_AUTH" && e.Confidence != c.want {
+				t.Errorf("status %d: confidence %s, want %s", c.status, e.Confidence, c.want)
+			}
+			if e.Type == "INSECURE_HTTP_COOKIE" && c.status != 200 && e.Confidence != "low" {
+				t.Errorf("cookie, status %d: %s", c.status, e.Confidence)
+			}
+		}
+	}
+	// The device as the client: its own credential, whatever the answer.
+	r = row("http")
+	r.AuthScheme = "basic"
+	r.Status = 401
+	if evs := Convert([]Row{r}, local); len(evs) != 1 || evs[0].Confidence != "high" {
+		t.Errorf("device as client: %+v", evs)
+	}
+}

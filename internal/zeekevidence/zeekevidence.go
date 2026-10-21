@@ -587,6 +587,18 @@ func httpEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 	dev := deviceEnd(r, local, true)
 	nameLimit := "Only the name was examined (Zeek does not log values here); the value may be empty, public, a per-request signature or already protected."
 
+	// Credentials sent to the device by another host are the device's only
+	// if the device accepted them; refused or unanswered ones may be
+	// guesses (a scanner, a brute force: E9), so they stay low.
+	toDevice := dev == r.RespH && local.Contains(r.RespH)
+	accepted := r.Status >= 200 && r.Status < 400
+	guessNote := " The credential was sent to the device and not seen accepted (no 2xx/3xx answer), so it may be a guess by another host."
+	lower := func(e *analyzer.Event) {
+		if toDevice && !accepted {
+			e.Confidence = "low"
+			e.Limitation += guessNote
+		}
+	}
 	if s := strings.ToLower(r.AuthScheme); s != "" && !signatureSchemes[s] {
 		e := baseEvent(r, "INSECURE_HTTP_AUTH", "I7", analyzer.SeverityCritical, dev)
 		// Only a known scheme name is written: an older log (gt.zeek) took
@@ -603,6 +615,7 @@ func httpEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 		e.ObservedFact = "An HTTP request in cleartext carried an Authorization header" + schemeNote(s) + "."
 		e.Inference = "A reusable credential or token can be read by anyone on the network path."
 		e.Limitation = "The value was not examined. Whether the login succeeded, and whether the credential is default or shared, is not known."
+		lower(&e)
 		out = append(out, e)
 	}
 	for _, h := range sorted(r.ReqHeaders) {
@@ -615,6 +628,7 @@ func httpEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 			e.Inference = "Session state may be readable by anyone on the network path."
 			e.Limitation = "The cookie was not examined; it may not carry authentication."
 			e.Confidence = "medium"
+			lower(&e)
 			out = append(out, e)
 		case h != "authorization" && !benignHeaders[h] && secretName.MatchString(h):
 			e := baseEvent(r, "INSECURE_HTTP_TOKEN", "I7", analyzer.SeverityCritical, dev)

@@ -220,3 +220,13 @@ go run ./cmd/quarant research-report \
   --taxonomy-coverage taxonomy_coverage_report.json \
   --out research_report.json
 ```
+
+### 対策の効果の試算（D29）
+
+```bash
+go run ./cmd/quarant countermeasure plan --events runs/merged-001/events.jsonl --out plan.json
+go run ./cmd/quarant countermeasure filter --plan plan.json --apply block_weak_destinations,isolate \
+  --gateway 192.168.0.1 --out filtered.pcap capture.pcap
+python3 scripts/assessment/countermeasure_effect.py docs/assessment/evidence-map.json EXCLUDE_MACS out.md \
+  BEFORE_RUN 両方=AFTER_RUN
+```

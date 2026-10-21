@@ -72,6 +72,10 @@ func main() {
 		if err := runMergeCLI(args[1:], os.Stdout); err != nil {
 			log.Fatal(err)
 		}
+	case "countermeasure":
+		if err := runCountermeasure(args[1:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
 	case "zeek":
 		if err := runZeek(args[1:], os.Stdout); err != nil {
 			log.Fatal(err)
