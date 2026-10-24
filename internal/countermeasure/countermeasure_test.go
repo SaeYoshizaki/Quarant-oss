@@ -243,3 +243,28 @@ func TestBaselines(t *testing.T) {
 		t.Errorf("broad: kept %d, want 5", kept)
 	}
 }
+
+// A connection already open when the capture starts is not taken for one
+// from the internet.
+func TestStartsInbound(t *testing.T) {
+	for _, c := range []struct {
+		proto        string
+		syn, ack     bool
+		sport, dport uint16
+		want         bool
+		what         string
+	}{
+		{"tcp", true, false, 40000, 22, true, "SYN from outside"},
+		{"tcp", false, true, 443, 50000, false, "mid-stream data from a server"},
+		{"tcp", true, true, 443, 50000, false, "SYN-ACK answer"},
+		{"udp", false, false, 53, 40000, false, "DNS answer"},
+		{"udp", false, false, 40000, 5353, true, "datagram to a service port"},
+	} {
+		if got := startsInbound(c.proto, false, true, c.syn, c.ack, c.sport, c.dport); got != c.want {
+			t.Errorf("%s: got %v", c.what, got)
+		}
+	}
+	if startsInbound("tcp", true, true, true, false, 40000, 22) {
+		t.Error("home to home is not inbound")
+	}
+}

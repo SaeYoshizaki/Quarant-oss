@@ -326,9 +326,11 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 	}
 	var proto string
 	var sport, dport uint16
+	var syn, ack bool
 	if t := p.Layer(layers.LayerTypeTCP); t != nil {
 		v := t.(*layers.TCP)
 		proto, sport, dport = "tcp", uint16(v.SrcPort), uint16(v.DstPort)
+		syn, ack = v.SYN, v.ACK
 	} else if u := p.Layer(layers.LayerTypeUDP); u != nil {
 		v := u.(*layers.UDP)
 		proto, sport, dport = "udp", uint16(v.SrcPort), uint16(v.DstPort)
@@ -338,7 +340,7 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		return "flow"
 	}
 	if _, ok := f.inbound[key]; !ok {
-		f.inbound[key] = !f.local.Contains(src) && f.local.Contains(dst)
+		f.inbound[key] = startsInbound(proto, f.local.Contains(src), f.local.Contains(dst), syn, ack, sport, dport)
 	}
 	if f.learning {
 		f.learn(src, srcMAC, dst, dstMAC, f.inbound[key])
@@ -533,6 +535,28 @@ func (f *Filter) learnNames(d *layers.DNS) {
 
 func (f *Filter) hasName(ip, domain string) bool {
 	return f.names[ip][domain]
+}
+
+// startsInbound decides, from the first packet of a flow in the capture,
+// whether the internet side started it. A capture begins in the middle of
+// connections the devices opened earlier (a day file starts at midnight),
+// so the first packet seen is not always the first packet sent:
+//   - TCP: only a SYN without ACK from outside counts; a flow first seen in
+//     mid-stream was established before and a router keeps it.
+//   - UDP: a datagram from outside counts unless it comes from a
+//     well-known service port to a high local port, which is the answer to
+//     a request sent before the capture (DNS, NTP, ...).
+func startsInbound(proto string, srcLocal, dstLocal, syn, ack bool, sport, dport uint16) bool {
+	if srcLocal || !dstLocal {
+		return false
+	}
+	switch proto {
+	case "tcp":
+		return syn && !ack
+	case "udp":
+		return !(sport < 1024 && dport >= 1024)
+	}
+	return true
 }
 
 // flowID is the same for both directions of a flow.
