@@ -9,10 +9,21 @@ their own, D25). Devices are identified by MAC; addresses are mapped to
 MACs with the run's device_inventory.json or, for a Zeek-only run, the
 MACs in quarant_evidence.log (--ipmac).
 
-usage: countermeasure_effect.py EVIDENCE_MAP EXCLUDE_MACS OUT_MD BEFORE_DIR NAME=AFTER_DIR... [--ipmac LOG] [--names JSON]
+A threat is a (device, provision, attacker position) triple. Positions:
+internet_path (the evidence is on traffic between the device and the
+internet: an observer on the path), inbound (an internet host connected to
+the device) and home (both ends inside the home network). Provisions are
+read as path risks or device properties (D29); 5.3-4A is evidence of
+conformance and is not counted as a threat.
+
+An AFTER spec may name the filter's stats file, NAME=DIR@STATS.json, to
+report how much the countermeasure stopped (packets, destinations).
+
+usage: countermeasure_effect.py EVIDENCE_MAP EXCLUDE_MACS OUT_MD BEFORE_DIR NAME=AFTER_DIR[@STATS]... [--ipmac LOG] [--names JSON]
 """
 import argparse
 import collections
+import ipaddress
 import json
 import os
 import sys
@@ -41,8 +52,34 @@ def ipmac_from_log(path):
     return out
 
 
+PATH = {"5.1-2A", "5.1-3", "5.5-1", "5.5-6", "5.5-7", "5.8-1", "5.8-2", "5.3-7", "6-8"}
+NOT_THREAT = {"5.3-4A"}
+
+
+def kind(prov):
+    return "path" if prov in PATH else "property"
+
+
+def is_local(ip):
+    try:
+        a = ipaddress.ip_address(ip)
+        return a.is_private or a.is_link_local
+    except ValueError:
+        return False
+
+
+def position(e):
+    dev, src, dst = e.get("device_key") or "", e.get("src_ip") or "", e.get("dst_ip") or ""
+    peer = dst if dev != dst else src
+    if not peer or is_local(peer):
+        return "home" if peer else "device"
+    return "inbound" if dev == dst else "internet_path"
+
+
 def hits(d, provs, ipmac, exclude):
+    """provision -> devices, and the set of (device, provision, position)."""
     out = collections.defaultdict(set)
+    threats = set()
     with open(os.path.join(d, "events.jsonl")) as f:
         for line in f:
             e = json.loads(line)
@@ -54,7 +91,9 @@ def hits(d, provs, ipmac, exclude):
             for p in provs:
                 if er.matches(p, e):
                     out[p["provision"]].add(mac)
-    return out
+                    if p["provision"] not in NOT_THREAT:
+                        threats.add((mac, p["provision"], position(e)))
+    return out, threats
 
 
 def main():
@@ -72,11 +111,16 @@ def main():
     exclude = {l.strip().lower() for l in open(a.exclude) if l.strip() and not l.startswith("#")}
     ipmac = ipmac_from_log(a.ipmac) if a.ipmac else ipmac_from_inventory(a.before)
     names = json.load(open(a.names)) if a.names else {}
-    before = hits(a.before, provs, ipmac, exclude)
-    afters = []
+    before, bthreats = hits(a.before, provs, ipmac, exclude)
+    afters, athreats, stats = [], {}, {}
     for spec in a.after:
         name, d = spec.split("=", 1)
-        afters.append((name, hits(d, provs, ipmac, exclude)))
+        d, _, st = d.partition("@")
+        h, t = hits(d, provs, ipmac, exclude)
+        afters.append((name, h))
+        athreats[name] = t
+        if st and os.path.exists(st):
+            stats[name] = json.load(open(st)).get("stats", {})
     L = ["# 対策の前後で証拠が残る機器の数", "",
          "`scripts/assessment/countermeasure_effect.py` で生成。値は「証拠が残る機器の数」。確度 low の証拠は数えない。", "",
          "| 要件 | 対策なし | " + " | ".join(n for n, _ in afters) + " |", "|---|---|" + "---|" * len(afters)]
@@ -90,6 +134,27 @@ def main():
         detail[v]["before"] = sorted(names.get(m, m) for m in before[v])
     allb = set().union(*before.values()) if before else set()
     L.append(f"| （いずれかの要件） | {len(allb)} | " + " | ".join(str(len(set().union(*h.values()) if h else set())) for _, h in afters) + " |")
+
+    # Threats: (device, provision, position), with how much each condition stopped.
+    def count(ts, k=None, pos=None):
+        return sum(1 for (_, prov, ps) in ts if (k is None or kind(prov) == k) and (pos is None or ps == pos))
+
+    def pct(after, before):
+        return f"{after} ({100 * (before - after) / before:.0f}% 減)" if before else f"{after}"
+    L += ["", "## 脅威（機器 × 要件 × 攻撃者の位置）の残り", "",
+          "経路：通信の経路で起きる危険（消えれば危険がなくなる）。性質：機器の中身の問題（届く範囲が狭まるだけ）。位置：internet_path＝インターネットとの通信の経路、inbound＝外から機器への接続、home＝家庭内。",
+          "", "| 条件 | すべて | 経路 | 性質 | internet_path | inbound | home | 止めたパケット | 止めた宛先 |",
+          "|---|---|---|---|---|---|---|---|---|"]
+    rows = [("対策なし", bthreats, None)] + [(n, athreats[n], stats.get(n)) for n, _ in afters]
+    for name, ts, st in rows:
+        cells = [pct(count(ts), count(bthreats)), pct(count(ts, "path"), count(bthreats, "path")),
+                 pct(count(ts, "property"), count(bthreats, "property"))]
+        cells += [pct(count(ts, pos=ps), count(bthreats, pos=ps)) for ps in ("internet_path", "inbound", "home")]
+        if st:
+            cells += [f"{100 * st.get('dropped', 0) / max(1, st.get('packets', 1)):.1f}%", str(st.get("blocked_destinations", ""))]
+        else:
+            cells += ["—", "—"]
+        L.append(f"| {name} | " + " | ".join(cells) + " |")
     open(a.out_md, "w").write("\n".join(L) + "\n")
     json.dump(detail, open(os.path.splitext(a.out_md)[0] + ".json", "w"), ensure_ascii=False, indent=1)
     print("\n".join(L))

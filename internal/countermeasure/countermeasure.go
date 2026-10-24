@@ -35,13 +35,51 @@ import (
 )
 
 const (
+	// Quarant's countermeasures, derived from each device's evidence.
 	BlockInbound          = "block_inbound"
 	BlockWeakDestinations = "block_weak_destinations"
 	Isolate               = "isolate"
+	// BlockWeakPorts is the broad form of BlockWeakDestinations: the
+	// device may not use the port of its weak traffic towards any
+	// internet destination.
+	BlockWeakPorts = "block_weak_ports"
+
+	// Baselines that use no knowledge of the devices (RESEARCH.md §9).
+	// RouterDefault: a home router's default, refusing connections that
+	// start from the internet, for every host.
+	RouterDefault = "router_default"
+	// IsolateIoT: IoT devices on a network of their own; they cannot
+	// reach the home's other hosts (phones, computers), only the gateway,
+	// each other and the internet.
+	IsolateIoT = "isolate_iot"
+	// BlockCleartextPorts: IoT devices may not open connections to the
+	// internet on ports of common cleartext protocols.
+	BlockCleartextPorts = "block_cleartext_ports"
+	// Allowlist: each IoT device may reach only the internet destinations
+	// it reached during a learning period (Learn).
+	Allowlist = "allowlist"
 )
 
+// CleartextPorts are the ports BlockCleartextPorts closes: HTTP, FTP,
+// Telnet, MQTT.
+var CleartextPorts = map[uint16]bool{80: true, 21: true, 23: true, 1883: true}
+
+// AllDevices in Rule.Device means every IoT device of the capture (every
+// home host whose MAC is not listed as non-IoT and that is not the
+// gateway).
+const AllDevices = "*"
+
+// Baseline returns the rule of a baseline condition.
+func Baseline(condition string) ([]Rule, error) {
+	switch condition {
+	case RouterDefault, IsolateIoT, BlockCleartextPorts:
+		return []Rule{{Countermeasure: condition, Device: AllDevices, Reason: "baseline"}}, nil
+	}
+	return nil, fmt.Errorf("unknown baseline %q (use %s, %s or %s)", condition, RouterDefault, IsolateIoT, BlockCleartextPorts)
+}
+
 // Countermeasures lists the simulated countermeasures in a fixed order.
-var Countermeasures = []string{BlockInbound, BlockWeakDestinations, Isolate}
+var Countermeasures = []string{BlockInbound, BlockWeakDestinations, Isolate, BlockWeakPorts, RouterDefault, IsolateIoT, BlockCleartextPorts, Allowlist}
 
 // Rule is one gateway rule. Device is the device's address in the
 // capture; Peer and PeerPort are set for block_weak_destinations.
@@ -117,6 +155,7 @@ func Plan(events []analyzer.Event, local analyzer.LocalNetworks, macOf func(ip s
 			add(Rule{Countermeasure: BlockInbound, Device: dev, Reason: e.Type})
 		case !local.Contains(peer) && weakTypes[e.Type]:
 			add(Rule{Countermeasure: BlockWeakDestinations, Device: dev, Peer: peer, PeerPort: peerPort, Domain: domainOf(e.Evidence), Reason: e.Type})
+			add(Rule{Countermeasure: BlockWeakPorts, Device: dev, PeerPort: peerPort, Reason: e.Type})
 		case local.Contains(peer):
 			add(Rule{Countermeasure: Isolate, Device: dev, Reason: e.Type})
 		}
@@ -145,6 +184,9 @@ type Stats struct {
 	FlowsBlocked   int            `json:"flows_blocked"`
 	NonIPPassed    int            `json:"non_ip_passed"`
 	UnparsedPassed int            `json:"unparsed_passed"`
+	// BlockedDestinations: distinct (device, internet address) pairs with
+	// at least one stopped packet, a measure of how much is cut off.
+	BlockedDestinations int `json:"blocked_destinations"`
 }
 
 // Filter copies the capture from r to w without the packets that the
@@ -163,20 +205,70 @@ type Filter struct {
 	blocked map[string]bool
 	// names: the DNS names the capture's answers gave each address
 	names map[string]map[string]bool
-	Stats Stats
+	// nonIoT: MACs of home hosts that are not IoT devices (phones,
+	// computers), for the baselines that apply to every IoT device.
+	nonIoT map[string]bool
+	// allowIP, allowName: the allowlist per device MAC.
+	allowIP, allowName map[string]map[string]bool
+	blockedDest        map[string]bool
+	// learning: record the internet destinations of each IoT device
+	// instead of filtering (Learn).
+	learning bool
+	learned  map[string]map[string]bool
+	Stats    Stats
 }
 
 func NewFilter(rules []Rule, chosen []string, local analyzer.LocalNetworks, gateways []string) *Filter {
-	f := &Filter{rules: rules, chosen: map[string]bool{}, local: local, gateways: map[string]bool{},
+	// Only the per-device rules are walked for every packet; baselines and
+	// the allowlist are looked up directly.
+	var perDevice []Rule
+	for _, r := range rules {
+		switch r.Countermeasure {
+		case BlockInbound, BlockWeakDestinations, BlockWeakPorts, Isolate:
+			perDevice = append(perDevice, r)
+		}
+	}
+	f := &Filter{rules: perDevice, chosen: map[string]bool{}, local: local, gateways: map[string]bool{},
 		inbound: map[string]bool{}, blocked: map[string]bool{}, names: map[string]map[string]bool{},
+		nonIoT: map[string]bool{}, allowIP: map[string]map[string]bool{}, allowName: map[string]map[string]bool{},
+		blockedDest: map[string]bool{}, learned: map[string]map[string]bool{},
 		Stats: Stats{DroppedBy: map[string]int{}}}
 	for _, c := range chosen {
 		f.chosen[c] = true
+	}
+	for _, r := range rules {
+		if r.Countermeasure != Allowlist || r.DeviceMAC == "" {
+			continue
+		}
+		m := strings.ToLower(r.DeviceMAC)
+		if f.allowIP[m] == nil {
+			f.allowIP[m], f.allowName[m] = map[string]bool{}, map[string]bool{}
+		}
+		if r.Peer != "" {
+			f.allowIP[m][r.Peer] = true
+		}
+		if r.Domain != "" {
+			f.allowName[m][r.Domain] = true
+		}
 	}
 	for _, g := range gateways {
 		f.gateways[strings.TrimSpace(g)] = true
 	}
 	return f
+}
+
+// SetNonIoT lists the MACs of home hosts that are not IoT devices.
+func (f *Filter) SetNonIoT(macs []string) {
+	for _, m := range macs {
+		if m = strings.ToLower(strings.TrimSpace(m)); m != "" {
+			f.nonIoT[m] = true
+		}
+	}
+}
+
+// isIoT: a home host that is not the gateway and not listed as non-IoT.
+func (f *Filter) isIoT(ip, mac string) bool {
+	return f.local.Contains(ip) && !f.gateways[ip] && !f.nonIoT[mac]
 }
 
 // Copy filters one capture file.
@@ -248,6 +340,51 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 	if _, ok := f.inbound[key]; !ok {
 		f.inbound[key] = !f.local.Contains(src) && f.local.Contains(dst)
 	}
+	if f.learning {
+		f.learn(src, srcMAC, dst, dstMAC, f.inbound[key])
+		return ""
+	}
+	stop := func(by, devMAC, peer string) string {
+		if proto != "" {
+			if !f.blocked[key] {
+				f.Stats.FlowsBlocked++
+			}
+			f.blocked[key] = true
+		}
+		if peer != "" && !f.local.Contains(peer) && !f.blockedDest[devMAC+"|"+peer] {
+			f.blockedDest[devMAC+"|"+peer] = true
+			f.Stats.BlockedDestinations++
+		}
+		return by
+	}
+	// Baselines over every device first.
+	if f.chosen[RouterDefault] && f.inbound[key] {
+		return stop(RouterDefault, dstMAC, src)
+	}
+	srcIoT, dstIoT := f.isIoT(src, srcMAC), f.isIoT(dst, dstMAC)
+	if f.chosen[IsolateIoT] {
+		// One end an IoT device, the other a home host that is not IoT.
+		if srcIoT && f.local.Contains(dst) && !f.gateways[dst] && f.nonIoT[dstMAC] ||
+			dstIoT && f.local.Contains(src) && !f.gateways[src] && f.nonIoT[srcMAC] {
+			return stop(IsolateIoT, "", "")
+		}
+	}
+	if f.chosen[BlockCleartextPorts] && proto == "tcp" {
+		if srcIoT && !f.local.Contains(dst) && CleartextPorts[dport] && !f.inbound[key] {
+			return stop(BlockCleartextPorts, srcMAC, dst)
+		}
+		if dstIoT && !f.local.Contains(src) && CleartextPorts[sport] && !f.inbound[key] {
+			return stop(BlockCleartextPorts, dstMAC, src)
+		}
+	}
+	if f.chosen[Allowlist] {
+		if srcIoT && !f.local.Contains(dst) && !f.allowed(srcMAC, dst) {
+			return stop(Allowlist, srcMAC, dst)
+		}
+		if dstIoT && !f.local.Contains(src) && !f.allowed(dstMAC, src) {
+			return stop(Allowlist, dstMAC, src)
+		}
+	}
 	for _, r := range f.rules {
 		if !f.chosen[r.Countermeasure] {
 			continue
@@ -274,21 +411,96 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		case BlockWeakDestinations:
 			portOK := r.PeerPort == 0 || peerPort == r.PeerPort
 			hit = portOK && (peer == r.Peer || r.Domain != "" && f.hasName(peer, r.Domain))
+		case BlockWeakPorts:
+			hit = !f.local.Contains(peer) && peerPort == r.PeerPort && !f.inbound[key]
 		case Isolate:
 			// Unicast to another home host that is not the gateway.
 			hit = f.local.Contains(peer) && !f.gateways[peer]
 		}
 		if hit {
-			if proto != "" {
-				if !f.blocked[key] {
-					f.Stats.FlowsBlocked++
-				}
-				f.blocked[key] = true
+			devMAC := srcMAC
+			if devIsDst {
+				devMAC = dstMAC
 			}
-			return r.Countermeasure
+			return stop(r.Countermeasure, devMAC, peer)
 		}
 	}
 	return ""
+}
+
+// allowed: the device reached this address, or a name of it, while the
+// allowlist was learned.
+func (f *Filter) allowed(mac, ip string) bool {
+	if f.allowIP[mac][ip] {
+		return true
+	}
+	for n := range f.names[ip] {
+		if f.allowName[mac][n] {
+			return true
+		}
+	}
+	return false
+}
+
+// learn records the destinations of connections the device started (and
+// the answers to them); connections from the internet are not learned, so
+// the allowlist does not admit them.
+func (f *Filter) learn(src, srcMAC, dst, dstMAC string, inbound bool) {
+	rec := func(mac, peer string) {
+		if f.learned[mac] == nil {
+			f.learned[mac] = map[string]bool{}
+		}
+		f.learned[mac]["ip|"+peer] = true
+		for n := range f.names[peer] {
+			f.learned[mac]["name|"+n] = true
+		}
+	}
+	if inbound {
+		return
+	}
+	if f.isIoT(src, srcMAC) && !f.local.Contains(dst) {
+		rec(srcMAC, dst)
+	}
+	if f.isIoT(dst, dstMAC) && !f.local.Contains(src) {
+		rec(dstMAC, src)
+	}
+}
+
+// NewLearner returns a Filter that records each IoT device's internet
+// destinations (addresses and the DNS names that led to them) instead of
+// filtering; Allowlist turns the record into rules.
+func NewLearner(local analyzer.LocalNetworks, gateways []string) *Filter {
+	f := NewFilter(nil, nil, local, gateways)
+	f.learning = true
+	return f
+}
+
+// AllowlistRules turns what a learner recorded into Allowlist rules.
+func (f *Filter) AllowlistRules() []Rule {
+	var out []Rule
+	macs := make([]string, 0, len(f.learned))
+	for m := range f.learned {
+		macs = append(macs, m)
+	}
+	sort.Strings(macs)
+	for _, m := range macs {
+		keys := make([]string, 0, len(f.learned[m]))
+		for k := range f.learned[m] {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			kind, v, _ := strings.Cut(k, "|")
+			r := Rule{Countermeasure: Allowlist, Device: AllDevices, DeviceMAC: m, Reason: "learned"}
+			if kind == "ip" {
+				r.Peer = v
+			} else {
+				r.Domain = v
+			}
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // learnNames keeps, for each address in a DNS answer, the names that led to

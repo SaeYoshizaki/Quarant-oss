@@ -76,6 +76,7 @@ func TestPlan(t *testing.T) {
 	want := []Rule{
 		{Countermeasure: BlockInbound, Device: "192.168.1.20", Reason: "I3_UNAUTHENTICATED_STREAM_ACCESS"},
 		{Countermeasure: BlockWeakDestinations, Device: "192.168.1.10", Peer: "203.0.113.5", PeerPort: 80, Reason: "INSECURE_HTTP_AUTH"},
+		{Countermeasure: BlockWeakPorts, Device: "192.168.1.10", PeerPort: 80, Reason: "INSECURE_HTTP_AUTH"},
 		{Countermeasure: Isolate, Device: "192.168.1.20", Reason: "I7_TLS_WEAK_CERTIFICATE_OBSERVED"},
 	}
 	if len(rules) != len(want) {
@@ -114,7 +115,7 @@ func TestFilter(t *testing.T) {
 		{[]string{BlockWeakDestinations}, 6, map[string]int{BlockWeakDestinations: 1, "flow": 1}},
 		{[]string{BlockInbound}, 6, map[string]int{BlockInbound: 1, "flow": 1}},
 		{[]string{Isolate}, 7, map[string]int{Isolate: 1}},
-		{Countermeasures, 3, nil},
+		{[]string{BlockInbound, BlockWeakDestinations, Isolate}, 3, nil},
 	} {
 		f := NewFilter(rules, c.chosen, local, []string{gw})
 		var out bytes.Buffer
@@ -155,7 +156,7 @@ func TestFilterOtherDay(t *testing.T) {
 	plan := Plan([]analyzer.Event{{Type: "I7_TLS_WEAK_VERSION_OBSERVED", Confidence: "high", DeviceKey: "192.168.1.50",
 		SrcIP: "192.168.1.50", SrcPort: 50000, DstIP: "203.0.113.5", DstPort: 443, Evidence: "risk_kind=deprecated_tls_version sni=api.Example.com"}},
 		local, func(string) string { return "02:00:00:00:00:01" })
-	if len(plan) != 1 || plan[0].Domain != "api.example.com" || plan[0].DeviceMAC != "02:00:00:00:00:01" {
+	if len(plan) != 2 || plan[0].Domain != "api.example.com" || plan[0].DeviceMAC != "02:00:00:00:00:01" || plan[1].Countermeasure != BlockWeakPorts {
 		t.Fatalf("plan = %+v", plan)
 	}
 	// pkt() sends from MAC 02:00:00:00:00:01; the device is now .10.
@@ -171,5 +172,74 @@ func TestFilterOtherDay(t *testing.T) {
 	}
 	if got := count(t, &out); got != 2 || f.Stats.DroppedBy[BlockWeakDestinations] != 1 {
 		t.Fatalf("kept %d, stats %+v", got, f.Stats)
+	}
+}
+
+func pktMAC(t *testing.T, srcMAC, dstMAC net.HardwareAddr, src string, sport uint16, dst string, dport uint16, syn bool) []byte {
+	t.Helper()
+	b := pkt(t, src, sport, dst, dport, syn)
+	copy(b[0:6], dstMAC)
+	copy(b[6:12], srcMAC)
+	return b
+}
+
+func TestBaselines(t *testing.T) {
+	iot, phone, gwMAC := net.HardwareAddr{2, 0, 0, 0, 0, 1}, net.HardwareAddr{2, 0, 0, 0, 0, 7}, net.HardwareAddr{2, 0, 0, 0, 0, 9}
+	dev, ph, gw, cloud, other := "192.168.1.10", "192.168.1.30", "192.168.1.1", "203.0.113.5", "198.51.100.9"
+	frames := [][]byte{
+		pktMAC(t, iot, gwMAC, dev, 50000, cloud, 80, true),  // 0 cleartext port to the internet
+		pktMAC(t, iot, gwMAC, dev, 50001, cloud, 443, true), // 1 TLS to the internet
+		pktMAC(t, gwMAC, iot, other, 40000, dev, 22, true),  // 2 inbound from the internet
+		pktMAC(t, phone, iot, ph, 40001, dev, 8080, true),   // 3 phone to the device
+		pktMAC(t, iot, gwMAC, dev, 50002, gw, 53, true),     // 4 the gateway
+		pktMAC(t, iot, gwMAC, dev, 50003, other, 443, true), // 5 another internet destination
+		pktMAC(t, phone, gwMAC, ph, 40002, other, 80, true), // 6 the phone's own traffic
+	}
+	run := func(rules []Rule, chosen []string) (int, Stats) {
+		f := NewFilter(rules, chosen, local, []string{gw})
+		f.SetNonIoT([]string{phone.String()})
+		var out bytes.Buffer
+		if err := f.Copy(capture(t, frames...), pcapgo.NewWriter(&out), true); err != nil {
+			t.Fatal(err)
+		}
+		return count(t, &out), f.Stats
+	}
+	for _, c := range []struct {
+		cond string
+		kept int
+	}{
+		{RouterDefault, 6},       // frame 2
+		{IsolateIoT, 6},          // frame 3
+		{BlockCleartextPorts, 6}, // frame 0; the phone's port 80 is not an IoT device's
+	} {
+		rules, err := Baseline(c.cond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kept, st := run(rules, []string{c.cond}); kept != c.kept {
+			t.Errorf("%s: kept %d, want %d (%+v)", c.cond, kept, c.kept, st)
+		}
+	}
+	// Allowlist learned from a capture where the device reached only the
+	// cloud: the other internet destination and the inbound connection are
+	// stopped; home traffic is not touched.
+	l := NewLearner(local, []string{gw})
+	l.SetNonIoT([]string{phone.String()})
+	var sink bytes.Buffer
+	if err := l.Copy(capture(t, frames[0], frames[1]), pcapgo.NewWriter(&sink), true); err != nil {
+		t.Fatal(err)
+	}
+	allow := l.AllowlistRules()
+	if len(allow) != 1 || allow[0].Peer != cloud || allow[0].DeviceMAC != iot.String() {
+		t.Fatalf("allowlist = %+v", allow)
+	}
+	if kept, st := run(allow, []string{Allowlist}); kept != 5 || st.BlockedDestinations != 1 {
+		t.Errorf("allowlist: kept %d (%+v)", kept, st)
+	}
+	// The broad Quarant rule closes the port towards every internet
+	// destination, not just the one seen.
+	broad := []Rule{{Countermeasure: BlockWeakPorts, Device: dev, DeviceMAC: iot.String(), PeerPort: 443}}
+	if kept, _ := run(broad, []string{BlockWeakPorts}); kept != 5 {
+		t.Errorf("broad: kept %d, want 5", kept)
 	}
 }
