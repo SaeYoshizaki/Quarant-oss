@@ -125,10 +125,24 @@ var weakTypes = map[string]bool{
 // Plan derives the rules from the evidence. Only events at medium or high
 // confidence count (low ones are not evidence on their own, D25), and only
 // events about a device in the home network.
+// PlanOptions narrows what a plan is made from.
+type PlanOptions struct {
+	// Counts, when set, keeps only events that are evidence of a violation
+	// (EvidenceMap.Counts).
+	Counts func(analyzer.Event) bool
+	// NonIoT lists MACs of home hosts that are not IoT devices; they get no
+	// rules (the baselines apply to IoT devices only too).
+	NonIoT map[string]bool
+}
+
 // macOf gives a device's MAC in this capture ("" when unknown).
-func Plan(events []analyzer.Event, local analyzer.LocalNetworks, macOf func(ip string) string) []Rule {
+func Plan(events []analyzer.Event, local analyzer.LocalNetworks, macOf func(ip string) string, opts ...PlanOptions) []Rule {
 	if macOf == nil {
 		macOf = func(string) string { return "" }
+	}
+	var o PlanOptions
+	if len(opts) > 0 {
+		o = opts[0]
 	}
 	seen := map[string]bool{}
 	var out []Rule
@@ -143,6 +157,9 @@ func Plan(events []analyzer.Event, local analyzer.LocalNetworks, macOf func(ip s
 	for _, e := range events {
 		dev := e.DeviceKey
 		if e.Debug || e.Confidence == "low" || dev == "" || !local.Contains(dev) || e.SrcIP == "" || e.DstIP == "" {
+			continue
+		}
+		if o.Counts != nil && !o.Counts(e) || o.NonIoT[strings.ToLower(macOf(dev))] {
 			continue
 		}
 		peer, peerPort := e.DstIP, e.DstPort

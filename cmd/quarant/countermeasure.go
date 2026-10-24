@@ -49,6 +49,8 @@ func runCountermeasurePlan(args []string, out io.Writer) error {
 	outPath := fs.String("out", "", "plan JSON output")
 	inventory := fs.String("inventory", "", "device_inventory.json, to name devices by MAC (default: next to --events)")
 	fs.String("condition", "quarant", "quarant (rules from --events) or a baseline: router_default, isolate_iot, block_cleartext_ports")
+	emapPath := fs.String("evidence-map", "", "evidence-map.json: make rules only from events that are evidence of a violation")
+	planNonIoT := fs.String("non-iot-macs", "", "file listing the MACs of home hosts that are not IoT devices (no rules for them)")
 	localNets := fs.String("local-net", "", "comma-separated CIDRs of the home network (default: RFC1918, link-local and ULA ranges)")
 	if err := fs.Parse(normalizeFlagArgs(fs, args)); err != nil {
 		return fmt.Errorf("parse countermeasure plan flags: %w", err)
@@ -95,7 +97,25 @@ func runCountermeasurePlan(args []string, out io.Writer) error {
 	} else if *inventory != "" {
 		return err
 	}
-	rules := countermeasure.Plan(evs, local, func(ip string) string { return macs[ip] })
+	var opts countermeasure.PlanOptions
+	if *emapPath != "" {
+		m, err := countermeasure.LoadEvidenceMap(*emapPath)
+		if err != nil {
+			return err
+		}
+		opts.Counts = m.Counts
+	}
+	if *planNonIoT != "" {
+		list, err := readMACList(*planNonIoT)
+		if err != nil {
+			return err
+		}
+		opts.NonIoT = map[string]bool{}
+		for _, m := range list {
+			opts.NonIoT[m] = true
+		}
+	}
+	rules := countermeasure.Plan(evs, local, func(ip string) string { return macs[ip] }, opts)
 	if err := writePrettyJSON(*outPath, map[string]any{"source_events": *events, "rules": rules}); err != nil {
 		return err
 	}

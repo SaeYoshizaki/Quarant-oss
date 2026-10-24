@@ -268,3 +268,29 @@ func TestStartsInbound(t *testing.T) {
 		t.Error("home to home is not inbound")
 	}
 }
+
+// A plan uses only violation evidence, and no rules for non-IoT hosts.
+func TestPlanOptions(t *testing.T) {
+	m, err := LoadEvidenceMap("../../docs/assessment/evidence-map.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := func(typ, dev, evidence string) analyzer.Event {
+		return analyzer.Event{Type: typ, Confidence: "medium", DeviceKey: dev, SrcIP: dev, SrcPort: 50000, DstIP: "203.0.113.5", DstPort: 443, Evidence: evidence}
+	}
+	evs := []analyzer.Event{
+		ev("I7_TLS_WEAK_CIPHER_SELECTED", "192.168.1.10", "risk_kind=cbc_cipher cipher_suite_name=TLS_RSA_WITH_AES_128_CBC_SHA"),
+		ev("I7_TLS_WEAK_VERSION_OBSERVED", "192.168.1.11", "risk_kind=deprecated_tls_version tls_version=TLS1.0"),
+		ev("I7_TLS_WEAK_VERSION_OBSERVED", "192.168.1.12", "risk_kind=deprecated_tls_version tls_version=TLS1.0"),
+	}
+	macs := map[string]string{"192.168.1.10": "02:00:00:00:00:10", "192.168.1.11": "02:00:00:00:00:11", "192.168.1.12": "02:00:00:00:00:12"}
+	rules := Plan(evs, local, func(ip string) string { return macs[ip] }, PlanOptions{Counts: m.Counts, NonIoT: map[string]bool{"02:00:00:00:00:12": true}})
+	for _, r := range rules {
+		if r.Device != "192.168.1.11" {
+			t.Errorf("unexpected rule %+v", r)
+		}
+	}
+	if len(rules) != 2 {
+		t.Fatalf("rules = %+v", rules)
+	}
+}
