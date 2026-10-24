@@ -230,6 +230,7 @@ func runCountermeasureFilter(args []string, out io.Writer) error {
 	} else if *outPath == "-" {
 		stats = ""
 	}
+	f.Finish()
 	if stats != "" {
 		if err := writePrettyJSON(stats, map[string]any{"apply": apply, "inputs": len(inputs), "stats": f.Stats}); err != nil {
 			return err

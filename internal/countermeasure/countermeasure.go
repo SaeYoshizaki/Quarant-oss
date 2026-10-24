@@ -204,6 +204,16 @@ type Stats struct {
 	// BlockedDestinations: distinct (device, internet address) pairs with
 	// at least one stopped packet, a measure of how much is cut off.
 	BlockedDestinations int `json:"blocked_destinations"`
+	// TopStopped: the (device MAC, destination) pairs with the most stopped
+	// packets; the destination is a DNS name when the capture gave one.
+	TopStopped []StoppedCount `json:"top_stopped,omitempty"`
+}
+
+type StoppedCount struct {
+	Device      string `json:"device"`
+	Destination string `json:"destination"`
+	By          string `json:"by"`
+	Packets     int    `json:"packets"`
 }
 
 // Filter copies the capture from r to w without the packets that the
@@ -228,6 +238,8 @@ type Filter struct {
 	// allowIP, allowName: the allowlist per device MAC.
 	allowIP, allowName map[string]map[string]bool
 	blockedDest        map[string]bool
+	stoppedCount       map[string]int
+	blockedLabel       map[string]string
 	// learning: record the internet destinations of each IoT device
 	// instead of filtering (Learn).
 	learning bool
@@ -248,7 +260,7 @@ func NewFilter(rules []Rule, chosen []string, local analyzer.LocalNetworks, gate
 	f := &Filter{rules: perDevice, chosen: map[string]bool{}, local: local, gateways: map[string]bool{},
 		inbound: map[string]bool{}, blocked: map[string]bool{}, names: map[string]map[string]bool{},
 		nonIoT: map[string]bool{}, allowIP: map[string]map[string]bool{}, allowName: map[string]map[string]bool{},
-		blockedDest: map[string]bool{}, learned: map[string]map[string]bool{},
+		blockedDest: map[string]bool{}, learned: map[string]map[string]bool{}, stoppedCount: map[string]int{}, blockedLabel: map[string]string{},
 		Stats: Stats{DroppedBy: map[string]int{}}}
 	for _, c := range chosen {
 		f.chosen[c] = true
@@ -354,6 +366,7 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 	}
 	key := flowID(proto, src, sport, dst, dport)
 	if f.blocked[key] {
+		f.stoppedCount[f.blockedLabel[key]]++
 		return "flow"
 	}
 	if _, ok := f.inbound[key]; !ok {
@@ -373,6 +386,11 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		if peer != "" && !f.local.Contains(peer) && !f.blockedDest[devMAC+"|"+peer] {
 			f.blockedDest[devMAC+"|"+peer] = true
 			f.Stats.BlockedDestinations++
+		}
+		lbl := devMAC + "|" + f.label(peer) + "|" + by
+		f.stoppedCount[lbl]++
+		if proto != "" {
+			f.blockedLabel[key] = lbl
 		}
 		return by
 	}
@@ -445,6 +463,42 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		}
 	}
 	return ""
+}
+
+// label names a destination for TopStopped: its DNS name when known.
+func (f *Filter) label(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	best := ""
+	for n := range f.names[ip] {
+		if best == "" || n < best {
+			best = n
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return ip
+}
+
+// Finish fills Stats.TopStopped (the 30 largest).
+func (f *Filter) Finish() {
+	var all []StoppedCount
+	for k, n := range f.stoppedCount {
+		parts := strings.SplitN(k, "|", 3)
+		all = append(all, StoppedCount{Device: parts[0], Destination: parts[1], By: parts[2], Packets: n})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Packets != all[j].Packets {
+			return all[i].Packets > all[j].Packets
+		}
+		return all[i].Device+all[i].Destination < all[j].Device+all[j].Destination
+	})
+	if len(all) > 30 {
+		all = all[:30]
+	}
+	f.Stats.TopStopped = all
 }
 
 // allowed: the device reached this address, or a name of it, while the
