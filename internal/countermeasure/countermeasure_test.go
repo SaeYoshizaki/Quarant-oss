@@ -294,3 +294,12 @@ func TestPlanOptions(t *testing.T) {
 		t.Fatalf("rules = %+v", rules)
 	}
 }
+
+func TestInternet(t *testing.T) {
+	f := NewFilter(nil, nil, local, nil)
+	for ip, want := range map[string]bool{"203.0.113.5": true, "239.255.255.250": false, "ff02::fb": false, "255.255.255.255": false, "192.168.1.10": false, "10.1.2.3": false} {
+		if got := f.internet(ip); got != want {
+			t.Errorf("%s: %v", ip, got)
+		}
+	}
+}

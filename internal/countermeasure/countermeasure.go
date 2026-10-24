@@ -23,6 +23,7 @@ package countermeasure
 import (
 	"fmt"
 	"io"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -295,6 +296,17 @@ func (f *Filter) SetNonIoT(macs []string) {
 	}
 }
 
+// internet: an address outside the home network that is a host on the
+// internet, not a multicast or broadcast group (SSDP, mDNS and the like stay
+// inside the home network).
+func (f *Filter) internet(ip string) bool {
+	a := net.ParseIP(ip)
+	if a == nil || f.local.Contains(ip) {
+		return false
+	}
+	return !(a.IsMulticast() || a.IsLinkLocalMulticast() || a.IsInterfaceLocalMulticast() || a.Equal(net.IPv4bcast) || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsPrivate())
+}
+
 // isIoT: a home host that is not the gateway and not listed as non-IoT.
 func (f *Filter) isIoT(ip, mac string) bool {
 	return f.local.Contains(ip) && !f.gateways[ip] && !f.nonIoT[mac]
@@ -383,7 +395,7 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 			}
 			f.blocked[key] = true
 		}
-		if peer != "" && !f.local.Contains(peer) && !f.blockedDest[devMAC+"|"+peer] {
+		if peer != "" && f.internet(peer) && !f.blockedDest[devMAC+"|"+peer] {
 			f.blockedDest[devMAC+"|"+peer] = true
 			f.Stats.BlockedDestinations++
 		}
@@ -407,18 +419,18 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 		}
 	}
 	if f.chosen[BlockCleartextPorts] && proto == "tcp" {
-		if srcIoT && !f.local.Contains(dst) && CleartextPorts[dport] && !f.inbound[key] {
+		if srcIoT && f.internet(dst) && CleartextPorts[dport] && !f.inbound[key] {
 			return stop(BlockCleartextPorts, srcMAC, dst)
 		}
-		if dstIoT && !f.local.Contains(src) && CleartextPorts[sport] && !f.inbound[key] {
+		if dstIoT && f.internet(src) && CleartextPorts[sport] && !f.inbound[key] {
 			return stop(BlockCleartextPorts, dstMAC, src)
 		}
 	}
 	if f.chosen[Allowlist] {
-		if srcIoT && !f.local.Contains(dst) && !f.allowed(srcMAC, dst) {
+		if srcIoT && f.internet(dst) && !f.allowed(srcMAC, dst) {
 			return stop(Allowlist, srcMAC, dst)
 		}
-		if dstIoT && !f.local.Contains(src) && !f.allowed(dstMAC, src) {
+		if dstIoT && f.internet(src) && !f.allowed(dstMAC, src) {
 			return stop(Allowlist, dstMAC, src)
 		}
 	}
@@ -449,7 +461,7 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 			portOK := r.PeerPort == 0 || peerPort == r.PeerPort
 			hit = portOK && (peer == r.Peer || r.Domain != "" && f.hasName(peer, r.Domain))
 		case BlockWeakPorts:
-			hit = !f.local.Contains(peer) && peerPort == r.PeerPort && !f.inbound[key]
+			hit = f.internet(peer) && peerPort == r.PeerPort && !f.inbound[key]
 		case Isolate:
 			// Unicast to another home host that is not the gateway.
 			hit = f.local.Contains(peer) && !f.gateways[peer]
@@ -531,10 +543,10 @@ func (f *Filter) learn(src, srcMAC, dst, dstMAC string, inbound bool) {
 	if inbound {
 		return
 	}
-	if f.isIoT(src, srcMAC) && !f.local.Contains(dst) {
+	if f.isIoT(src, srcMAC) && f.internet(dst) {
 		rec(srcMAC, dst)
 	}
-	if f.isIoT(dst, dstMAC) && !f.local.Contains(src) {
+	if f.isIoT(dst, dstMAC) && f.internet(src) {
 		rec(dstMAC, src)
 	}
 }
