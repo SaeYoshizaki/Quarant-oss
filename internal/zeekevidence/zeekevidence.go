@@ -92,6 +92,7 @@ type Row struct {
 	SWType    string `json:"sw_type"`
 	SWName    string `json:"sw_name"`
 	SWVersion string `json:"sw_version"`
+	SWDistro  bool   `json:"sw_distro"`
 }
 
 // RunZeek runs Zeek with evidence.zeek over pcap inside workDir and returns
@@ -189,7 +190,23 @@ func Convert(rows []Row, local analyzer.LocalNetworks) []analyzer.Event {
 	// Zeek names a host's software once per run; a capture split into many
 	// files names it once per file.
 	seenSoftware := map[string]bool{}
+	// Hosts whose SSH banner names a distribution; older logs have no
+	// sw_distro, but the banner tells the same.
+	distro := map[string]bool{}
 	for _, r := range rows {
+		if r.Kind == "ssh" {
+			if distroBanner.MatchString(r.SSHServer) {
+				distro[r.RespH] = true
+			}
+			if distroBanner.MatchString(r.SSHClient) {
+				distro[r.OrigH] = true
+			}
+		}
+	}
+	for _, r := range rows {
+		if r.Kind == "software" && distro[r.SWHost] && strings.HasPrefix(r.SWType, "SSH::") {
+			r.SWDistro = true
+		}
 		switch r.Kind {
 		case "software":
 			k := r.SWHost + "|" + r.SWType + "|" + strings.ToLower(r.SWName) + "|" + r.SWVersion
@@ -375,7 +392,10 @@ func certEvent(r Row, local analyzer.LocalNetworks) (analyzer.Event, bool) {
 	e.ObservedFact = "Zeek's X.509 parser saw the server's leaf certificate in the TLS handshake with " + strings.Join(weak, " and ") + "."
 	e.Inference = "The channel's server authentication rests on cryptography that NIST SP 800-131A disallows."
 	e.Limitation = "Only the leaf certificate is examined; whether the client validated it, pinned it or ignored it is not visible. TLS 1.3 sends certificates encrypted, so they are not seen there."
-	if !r.Established {
+	// A certificate the device presents as the server is its own, whether
+	// or not the other side finished the handshake.
+	deviceIsServer := deviceEnd(r, local, true) == r.RespH && local.Contains(r.RespH)
+	if !r.Established && !deviceIsServer {
 		// Not evidence on its own: the client may have rejected the
 		// certificate. In YourThings 2018 a quarter of these events did not
 		// complete, against 0.4% in UNSW; the dataset authors tested
@@ -497,7 +517,14 @@ func plausibleDisclosure(name string) bool {
 	return len(n) > 1 && !upnpMandated[n] && !strings.Contains(n, "upnp")
 }
 
+// realVersion: a version with a non-zero part ("Withings 0" names no version).
+func realVersion(v string) bool {
+	return strings.Trim(strings.ReplaceAll(v, ".", ""), "0") != ""
+}
+
 var vulnDB = sync.OnceValues(versionvuln.Load)
+
+var distroBanner = regexp.MustCompile(`(?i)ubuntu|debian|raspbian|fedora|red ?hat|centos|deb[0-9]`)
 
 func softwareEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 	if r.SWHost == "" || !local.Contains(r.SWHost) || r.SWName == "" {
@@ -506,7 +533,7 @@ func softwareEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 	var out []analyzer.Event
 	sw := fmt.Sprintf("software_type=%s name=%q version=%s", r.SWType, r.SWName, r.SWVersion)
 	tail := fmt.Sprintf(" host=%s source=zeek", r.SWHost)
-	if d, ok := disclosureTypes[r.SWType]; ok && r.SWVersion != "" && plausibleDisclosure(r.SWName) {
+	if d, ok := disclosureTypes[r.SWType]; ok && realVersion(r.SWVersion) && plausibleDisclosure(r.SWName) {
 		e := baseEvent(r, "I3_SOFTWARE_VERSION_DISCLOSED", "I3", analyzer.SeverityInfo, r.SWHost)
 		e.FlowKey, e.SrcIP, e.SrcPort, e.DstIP, e.DstPort = "", r.SWHost, 0, "", 0
 		e.Evidence = sw + tail
@@ -552,6 +579,10 @@ func softwareEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
 	if partial {
 		e.Confidence = "low"
 		e.Limitation += " The named version has fewer parts than the affected versions, so it may be outside the range."
+	}
+	if r.SWDistro {
+		e.Confidence = "low"
+		e.Limitation += " The banner names a distribution, whose packages take fixes without changing the upstream version."
 	}
 	if product.Suite {
 		e.Confidence = "low"

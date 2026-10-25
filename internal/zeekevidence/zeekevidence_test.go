@@ -427,3 +427,36 @@ func TestCredentialsToDevice(t *testing.T) {
 		t.Errorf("device as client: %+v", evs)
 	}
 }
+
+func TestAuditRefinements(t *testing.T) {
+	// The device presents a weak certificate as the server: its own,
+	// whether or not the client completed the handshake.
+	r := row("tls")
+	r.OrigH, r.RespH, r.RespP = "192.168.1.30", "192.168.1.20", 443
+	r.CertKeyType, r.CertKeyLength, r.CertSelfSigned = "rsa", 1024, true
+	if evs := Convert([]Row{r}, local); len(evs) != 1 || evs[0].Confidence != "high" || evs[0].DeviceKey != "192.168.1.20" {
+		t.Errorf("device as server: %+v", evs)
+	}
+	// "Withings 0" names no version.
+	if evs := Convert([]Row{swRow("DHCP::CLIENT", "Withings", "0")}, local); len(evs) != 0 {
+		t.Errorf("version 0: %v", types(evs))
+	}
+	// A distribution's package: low.
+	d := swRow("SSH::SERVER", "OpenSSH", "6.6.1")
+	d.SWDistro = true
+	for _, e := range Convert([]Row{d}, local) {
+		if e.Type == "I5_VULNERABLE_VERSION_CANDIDATE" && e.Confidence != "low" {
+			t.Errorf("distribution banner: %s", e.Confidence)
+		}
+	}
+}
+
+func TestDistroFromBanner(t *testing.T) {
+	ssh := row("ssh")
+	ssh.OrigH, ssh.RespH, ssh.SSHServer = "192.168.1.31", "192.168.1.30", "SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2"
+	for _, e := range Convert([]Row{ssh, swRow("SSH::SERVER", "OpenSSH", "6.6.1")}, local) {
+		if e.Type == "I5_VULNERABLE_VERSION_CANDIDATE" && e.Confidence != "low" {
+			t.Errorf("banner with Ubuntu: %s", e.Confidence)
+		}
+	}
+}

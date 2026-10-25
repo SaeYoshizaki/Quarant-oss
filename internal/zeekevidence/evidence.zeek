@@ -95,6 +95,9 @@ export {
 		sw_type: string &log &optional;
 		sw_name: string &log &optional;
 		sw_version: string &log &optional;
+		# The banner names a distribution (Ubuntu, Debian, ...), whose
+		# packages take fixes without changing the upstream version.
+		sw_distro: bool &log &optional;
 	};
 }
 
@@ -391,5 +394,7 @@ event Software::log_software(rec: Software::Info)
 	r$sw_type = cat(rec$software_type);
 	r$sw_name = rec$name;
 	if ( ver != "" ) r$sw_version = ver;
+	if ( rec?$unparsed_version && /[uU]buntu|[dD]ebian|[rR]aspbian|[fF]edora|[rR]ed ?[hH]at|[cC]ent[oO][sS]|deb[0-9]/ in rec$unparsed_version )
+		r$sw_distro = T;
 	Log::write(QuarantEvidence::LOG, r);
 	}

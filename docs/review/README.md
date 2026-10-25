@@ -17,3 +17,4 @@ Quarant 自体はルールベースで、解析の途中で LLM を使わない�
 確認済み（以前）：基準の判定（[../assessment/human-review-accuracy.md](../assessment/human-review-accuracy.md)、36 件、伏せて判定）。
 
 確認のしかた：Claude の判定と理由を見たうえで、容認するか変更するかを選ぶ（判定を伏せない形）。論文には「人が全件を確認した（LLM の判定と理由を見たうえで）」と書く。チェックが終わったら Claude に伝えれば、変更を記録とデータに反映し、数字を出し直す。
+- [D：OSS から足した検出の正しさ（O11）](D-oss-detections.md)：2026-10-25、利用者の確認待ち
