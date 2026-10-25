@@ -208,6 +208,14 @@ type Stats struct {
 	// TopStopped: the (device MAC, destination) pairs with the most stopped
 	// packets; the destination is a DNS name when the capture gave one.
 	TopStopped []StoppedCount `json:"top_stopped,omitempty"`
+	// PerDevice: packets each IoT device sent or received, and how many of
+	// them were stopped (by MAC).
+	PerDevice map[string]*DeviceCount `json:"per_device,omitempty"`
+}
+
+type DeviceCount struct {
+	Packets int `json:"packets"`
+	Stopped int `json:"stopped"`
 }
 
 type StoppedCount struct {
@@ -244,6 +252,8 @@ type Filter struct {
 	// ipMAC: the MAC each home address was seen sending from, for captures
 	// without the receiver's link address.
 	ipMAC map[string]string
+	// lastDevices: the IoT devices (MACs) at either end of the last packet
+	lastDevices []string
 	// learning: record the internet destinations of each IoT device
 	// instead of filtering (Learn).
 	learning bool
@@ -265,7 +275,7 @@ func NewFilter(rules []Rule, chosen []string, local analyzer.LocalNetworks, gate
 		inbound: map[string]bool{}, blocked: map[string]bool{}, names: map[string]map[string]bool{},
 		nonIoT: map[string]bool{}, allowIP: map[string]map[string]bool{}, allowName: map[string]map[string]bool{},
 		blockedDest: map[string]bool{}, learned: map[string]map[string]bool{}, stoppedCount: map[string]int{}, blockedLabel: map[string]string{}, ipMAC: map[string]string{},
-		Stats: Stats{DroppedBy: map[string]int{}}}
+		Stats: Stats{DroppedBy: map[string]int{}, PerDevice: map[string]*DeviceCount{}}}
 	for _, c := range chosen {
 		f.chosen[c] = true
 	}
@@ -335,7 +345,19 @@ func (f *Filter) Copy(r io.Reader, w *pcapgo.Writer, writeHeader bool) error {
 			return err
 		}
 		f.Stats.Packets++
-		if by := f.decide(data, rd.LinkType()); by != "" {
+		by := f.decide(data, rd.LinkType())
+		for _, m := range f.lastDevices {
+			c := f.Stats.PerDevice[m]
+			if c == nil {
+				c = &DeviceCount{}
+				f.Stats.PerDevice[m] = c
+			}
+			c.Packets++
+			if by != "" {
+				c.Stopped++
+			}
+		}
+		if by != "" {
 			f.Stats.Dropped++
 			f.Stats.DroppedBy[by]++
 			continue
@@ -348,6 +370,7 @@ func (f *Filter) Copy(r io.Reader, w *pcapgo.Writer, writeHeader bool) error {
 
 // decide returns the countermeasure that stops the packet, or "".
 func (f *Filter) decide(data []byte, lt layers.LinkType) string {
+	f.lastDevices = f.lastDevices[:0]
 	p := gopacket.NewPacket(data, lt, gopacket.DecodeOptions{Lazy: true, NoCopy: true})
 	var srcMAC, dstMAC string
 	sll := false
@@ -383,6 +406,13 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 			f.ipMAC[src] = srcMAC
 		}
 		dstMAC = f.ipMAC[dst]
+	}
+	f.lastDevices = f.lastDevices[:0]
+	if srcMAC != "" && f.isIoT(src, srcMAC) {
+		f.lastDevices = append(f.lastDevices, srcMAC)
+	}
+	if dstMAC != "" && dstMAC != srcMAC && f.isIoT(dst, dstMAC) {
+		f.lastDevices = append(f.lastDevices, dstMAC)
 	}
 	var proto string
 	var sport, dport uint16

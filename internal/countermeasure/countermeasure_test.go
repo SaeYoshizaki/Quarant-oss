@@ -233,7 +233,7 @@ func TestBaselines(t *testing.T) {
 	if len(allow) != 1 || allow[0].Peer != cloud || allow[0].DeviceMAC != iot.String() {
 		t.Fatalf("allowlist = %+v", allow)
 	}
-	if kept, st := run(allow, []string{Allowlist}); kept != 5 || st.BlockedDestinations != 1 {
+	if kept, st := run(allow, []string{Allowlist}); kept != 5 || st.BlockedDestinations != 1 || st.PerDevice[iot.String()] == nil || st.PerDevice[iot.String()].Stopped != 2 || st.PerDevice[phone.String()] != nil {
 		t.Errorf("allowlist: kept %d (%+v)", kept, st)
 	}
 	// The broad Quarant rule closes the port towards every internet
