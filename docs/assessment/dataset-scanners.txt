@@ -1,0 +1,3 @@
+# Hosts that scanned or attacked the devices as part of a dataset, not household members.
+# YourThings 2018: the Nessus host (192.168.0.200, client banner TenableRocks) of the dataset authors.
+02:42:c0:a8:00:c8
