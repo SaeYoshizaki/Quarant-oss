@@ -37,12 +37,21 @@ func (h *FlowHandler) observeLinkLayer(packet gopacket.Packet, now time.Time, sr
 		}
 		return
 	}
-	ethLayer := packet.Layer(layers.LayerTypeEthernet)
-	if ethLayer == nil || srcIP == "" {
+	if srcIP == "" {
 		return
 	}
-	eth := ethLayer.(*layers.Ethernet)
-	h.bindMAC(now, srcIP, eth.SrcMAC, "ethernet")
+	if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
+		h.bindMAC(now, srcIP, ethLayer.(*layers.Ethernet).SrcMAC, "ethernet")
+		return
+	}
+	// Linux cooked captures (e.g. the Deakin IoT dataset) carry the
+	// sender's link address only.
+	if sllLayer := packet.Layer(layers.LayerTypeLinuxSLL); sllLayer != nil {
+		sll := sllLayer.(*layers.LinuxSLL)
+		if sll.AddrLen == 6 {
+			h.bindMAC(now, srcIP, net.HardwareAddr(sll.Addr), "linux_sll")
+		}
+	}
 }
 
 func (h *FlowHandler) bindMAC(now time.Time, ip string, mac net.HardwareAddr, source string) {

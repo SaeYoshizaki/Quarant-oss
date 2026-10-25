@@ -29,6 +29,8 @@ import evidence_rates as er  # noqa: E402
 CREDENTIAL = {"5.1-1", "5.1-2", "5.1-2A", "5.5-6", "5.5-7"}
 GROUPS = dict(er.GROUPS)
 GROUPS["iot-"] = "UNSW-IoTraffic 2016-17"
+GROUPS["deakin-2023"] = "Deakin 2023"
+GROUPS["deakin-2024"] = "Deakin 2024"
 
 
 def inventory(d):
