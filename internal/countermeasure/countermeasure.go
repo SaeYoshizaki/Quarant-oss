@@ -241,6 +241,9 @@ type Filter struct {
 	blockedDest        map[string]bool
 	stoppedCount       map[string]int
 	blockedLabel       map[string]string
+	// ipMAC: the MAC each home address was seen sending from, for captures
+	// without the receiver's link address.
+	ipMAC map[string]string
 	// learning: record the internet destinations of each IoT device
 	// instead of filtering (Learn).
 	learning bool
@@ -261,7 +264,7 @@ func NewFilter(rules []Rule, chosen []string, local analyzer.LocalNetworks, gate
 	f := &Filter{rules: perDevice, chosen: map[string]bool{}, local: local, gateways: map[string]bool{},
 		inbound: map[string]bool{}, blocked: map[string]bool{}, names: map[string]map[string]bool{},
 		nonIoT: map[string]bool{}, allowIP: map[string]map[string]bool{}, allowName: map[string]map[string]bool{},
-		blockedDest: map[string]bool{}, learned: map[string]map[string]bool{}, stoppedCount: map[string]int{}, blockedLabel: map[string]string{},
+		blockedDest: map[string]bool{}, learned: map[string]map[string]bool{}, stoppedCount: map[string]int{}, blockedLabel: map[string]string{}, ipMAC: map[string]string{},
 		Stats: Stats{DroppedBy: map[string]int{}}}
 	for _, c := range chosen {
 		f.chosen[c] = true
@@ -347,9 +350,19 @@ func (f *Filter) Copy(r io.Reader, w *pcapgo.Writer, writeHeader bool) error {
 func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 	p := gopacket.NewPacket(data, lt, gopacket.DecodeOptions{Lazy: true, NoCopy: true})
 	var srcMAC, dstMAC string
+	sll := false
 	if eth := p.Layer(layers.LayerTypeEthernet); eth != nil {
 		v := eth.(*layers.Ethernet)
 		srcMAC, dstMAC = v.SrcMAC.String(), v.DstMAC.String()
+	} else if l := p.Layer(layers.LayerTypeLinuxSLL); l != nil {
+		// Linux cooked capture (e.g. the Deakin IoT dataset) records only
+		// the sender's link address; the receiver's MAC is taken from the
+		// address it was last seen sending from.
+		v := l.(*layers.LinuxSLL)
+		if v.AddrLen == 6 {
+			srcMAC = net.HardwareAddr(v.Addr).String()
+		}
+		sll = true
 	}
 	if d := p.Layer(layers.LayerTypeDNS); d != nil {
 		f.learnNames(d.(*layers.DNS))
@@ -364,6 +377,12 @@ func (f *Filter) decide(data []byte, lt layers.LinkType) string {
 	} else {
 		f.Stats.NonIPPassed++
 		return ""
+	}
+	if sll {
+		if srcMAC != "" && f.local.Contains(src) {
+			f.ipMAC[src] = srcMAC
+		}
+		dstMAC = f.ipMAC[dst]
 	}
 	var proto string
 	var sport, dport uint16
