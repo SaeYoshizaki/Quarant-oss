@@ -258,8 +258,8 @@ func TestCertificate(t *testing.T) {
 	}
 	r.CertKeyType, r.CertKeyLength = "rsa", 512
 	evs = Convert([]Row{r}, local)
-	if len(evs) != 1 || evs[0].Confidence != "medium" {
-		t.Fatalf("handshake not completed should lower confidence: %+v", evs)
+	if len(evs) != 1 || evs[0].Confidence != "low" {
+		t.Fatalf("handshake not completed is not evidence on its own: %+v", evs)
 	}
 }
 

@@ -376,8 +376,13 @@ func certEvent(r Row, local analyzer.LocalNetworks) (analyzer.Event, bool) {
 	e.Inference = "The channel's server authentication rests on cryptography that NIST SP 800-131A disallows."
 	e.Limitation = "Only the leaf certificate is examined; whether the client validated it, pinned it or ignored it is not visible. TLS 1.3 sends certificates encrypted, so they are not seen there."
 	if !r.Established {
+		// Not evidence on its own: the client may have rejected the
+		// certificate. In YourThings 2018 a quarter of these events did not
+		// complete, against 0.4% in UNSW; the dataset authors tested
+		// certificate validation with an interception proxy, so the
+		// rejections may be the devices doing the right thing (O11).
 		e.Limitation += " The handshake was not seen to complete, so the client may have rejected the certificate."
-		e.Confidence = "medium"
+		e.Confidence = "low"
 	}
 	return e, true
 }
