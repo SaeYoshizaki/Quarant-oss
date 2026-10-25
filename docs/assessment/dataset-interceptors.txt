@@ -1,0 +1,6 @@
+# Common names of certificate issuers that belong to a dataset's own
+# interception tests, not to the servers the devices talk to. TLS events on
+# connections that carry one of these issuers are not counted (O12).
+# YourThings 2018: the authors' proxy at Georgia Tech, seen 2018-04-10..12,
+# issuing 1024-bit RSA copies of the servers' certificates.
+thing-catcher.gtisc.gatech.edu

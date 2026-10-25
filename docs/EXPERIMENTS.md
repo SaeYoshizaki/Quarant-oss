@@ -1470,3 +1470,30 @@ python3 scripts/accuracy/compare_misses.py docs/assessment/evidence-map.json ~/d
 - 直したあとの比較表（[assessment/integration-rates.md](assessment/integration-rates.md)）：YourThings の古い暗号は 21 → 27 台（直す前 38 台）、脆弱性のある版は 0 → 5 台（6 台）、版の開示は UNSW 2016 で 0 → 15 台（16 台）、UNSW-IoTraffic で 0 → 12 台（13 台）。
 
 **限界**：O8〜O10 の対策の実験は、直す前の Zeek 経由の結果で計画と脅威を数えている（YourThings のハンドシェイク未完了の弱い証明書を含む）。O10 の独立した物差しは証明書を数えないので、この影響を受けない。
+
+## O12：YourThings の弱い証明書は、作成者の中間者の試験だった（2026-10-25）
+
+**目的**：O11 で見つけた「ハンドシェイクが終わっていない弱い証明書」が、YourThings の作成者の試験によるものかを、元データ（USB の tgz）で確かめる。
+
+**方法**：
+1. 解析済みの Zeek の記録で、弱い証明書を接続先（IP と SNI）ごとに分けた。同じ接続先が、ハンドシェイクが終わった接続では強い証明書を、終わっていない接続では弱い証明書を出していれば、途中で差し替えられた疑いがある。
+2. 4 月 11 日の 3 つの 5 分区間を取り出し、Zeek の標準のログで証明書の発行者を見た。
+3. Zeek の証拠のスクリプトで、証明書の発行者を記録するようにした（`cert_issuer`。公開情報で、秘密ではない）。Go の変換では、TLS の証拠に `cert_issuer_cn=` を付ける。YourThings の 4 日分の Zeek の経路だけを回し直した（Quarant 単体の結果はそのまま、[scripts/assessment/rezeek_yourthings.sh](../scripts/assessment/rezeek_yourthings.sh)）。
+4. データセットの試験用の発行者の一覧（[assessment/dataset-interceptors.txt](assessment/dataset-interceptors.txt)）を作り、`integration_rates.py` でその発行者の接続の証拠を数えないようにした。データセットのスキャナー（`dataset-scanners.txt`）と同じ扱い。
+
+**結果**：
+- 3 月 20 日は、ハンドシェイクが終わっていない弱い証明書が 0 件。4 月 10〜12 日は数百件で、相手には Google（doubleclick）、Amazon、NVIDIA、Apple のサーバーが含まれていた。同じサーバーでも、ハンドシェイクが終わった接続では強い証明書が出ていた。
+- 弱い証明書の発行者は、すべて `CN=thing-catcher.gtisc.gatech.edu,O=Internet Widgits Pty Ltd,L=Atlanta`（ジョージア工科大学、作成者の所属）。証明書の名前は本物そっくり（`*.g.doubleclick.net`、`api.roku.com`、`gateway.icloud.com` など）で、鍵は 1024 ビットの RSA。試験は機器を 1 台ずつ順に回っていた。
+- この発行者の接続は、4 月 10 日 913、11 日 415、12 日 186、3 月 20 日 0。
+- 偽の証明書のままハンドシェイクを終えた IoT 機器が 10 台あった（Wink のハブ、August、Apple TV、Logitech Harmony、Vera、Belkin、Google の機器、Samsung の機器など）。Zeek の「終わった」は、機器が偽の証明書で鍵の交換まで進んだことを意味する。その後でアプリが切った可能性は、ここでは確かめていない。
+- 数え直し（[assessment/integration-rates.md](assessment/integration-rates.md)）：YourThings の古い暗号（5.1-3、5.5-1）は OSS 込みで 27 → **25 台**。2 台は、試験の偽の証明書（ハンドシェイクは終わった）でしか引っかかっていなかった。ほかの要件は変わらない。
+
+**考察**：中間者の試験の跡は、規格の要件の証拠（サーバーの証明書が弱い）ではない。一方、偽の証明書を受け入れた機器が見えたのは、パッシブな観測でも「誰かが割り込んだとき」に限って、証明書を確かめない機器が分かることを示す。普段の家庭では起きないので、検出の対象にはしない。
+
+**限界**：Zeek の経路以外（Quarant 単体）は発行者を見ていない。Quarant 単体は証明書を調べないので、影響はないと考えている。O8 の対策の実験は、この直しの前の結果で計画を作っている（回し直しの予定）。
+
+## O13：Deakin（2023〜2024 年）での見つける側と減らす側（2026-10-25、実行中）
+
+**見つける側**：`pcapFull` の 34 日を Quarant と Zeek で解析した（`runs-oss1-deakin`）。対応表の 24 台のうち、通信が見えたのは 19 台（集計の対象は 2023 年 14 台、2024 年 17 台）。弱点の証拠そのものが少ない。古い暗号は Netatmo のカメラ（SSL 3.0 が選ばれた）、Echo Show 8（TLS 1.0）、Samsung のモニター（SHA-1 の証明書、Zeek から）。平文の Cookie は Samsung のモニター。Zeek で増えたのは DHCP で名乗る版（udhcp 1.19.4、dhcpcd 5.5.6 など、2023 年 6 台、2024 年 7 台）。
+
+**減らす側**：2023-07-26〜08-01 で学習・計画し、2023-08-14〜20、08-31〜09-06、2024-04-08〜14、05-13〜19 に当てる（[scripts/assessment/deakin_countermeasures.sh](../scripts/assessment/deakin_countermeasures.sh)、O9 と O10 を一度に）。結果はあとで追記する。

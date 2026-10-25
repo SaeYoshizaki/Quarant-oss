@@ -72,6 +72,7 @@ type Row struct {
 	CertSigAlg     string `json:"cert_sig_alg"`
 	CertSelfSigned bool   `json:"cert_self_signed"`
 	CertExpired    bool   `json:"cert_expired"`
+	CertIssuer     string `json:"cert_issuer"`
 	Established    bool   `json:"established"`
 
 	SSHVersion int    `json:"ssh_version"`
@@ -308,7 +309,25 @@ func peer(r Row) string {
 }
 
 func suffix(r Row) string {
-	return fmt.Sprintf(" src=%s:%d dst=%s:%d peer=%s source=zeek uid=%s", r.OrigH, r.OrigP, r.RespH, r.RespP, peer(r), r.UID)
+	s := fmt.Sprintf(" src=%s:%d dst=%s:%d peer=%s source=zeek uid=%s", r.OrigH, r.OrigP, r.RespH, r.RespP, peer(r), r.UID)
+	if cn := issuerCN(r.CertIssuer); cn != "" {
+		// Lets an analysis set aside the connections of a known
+		// interception proxy, such as the YourThings authors' (O12).
+		s += " cert_issuer_cn=" + cn
+	}
+	return s
+}
+
+// issuerCN is the common name in an issuer distinguished name as Zeek
+// writes it ("CN=...,O=...,C=..."), with spaces replaced so that the
+// evidence stays a list of key=value tokens.
+func issuerCN(dn string) string {
+	for _, part := range strings.Split(dn, ",") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(part), "CN="); ok {
+			return strings.ReplaceAll(strings.TrimSpace(v), " ", "_")
+		}
+	}
+	return ""
 }
 
 func tlsEvents(r Row, local analyzer.LocalNetworks) []analyzer.Event {
@@ -398,9 +417,9 @@ func certEvent(r Row, local analyzer.LocalNetworks) (analyzer.Event, bool) {
 	if !r.Established && !deviceIsServer {
 		// Not evidence on its own: the client may have rejected the
 		// certificate. In YourThings 2018 a quarter of these events did not
-		// complete, against 0.4% in UNSW; the dataset authors tested
-		// certificate validation with an interception proxy, so the
-		// rejections may be the devices doing the right thing (O11).
+		// complete, against 0.4% in UNSW: the certificates were the dataset
+		// authors' interception proxy's, which the devices rejected (O11,
+		// O12).
 		e.Limitation += " The handshake was not seen to complete, so the client may have rejected the certificate."
 		e.Confidence = "low"
 	}

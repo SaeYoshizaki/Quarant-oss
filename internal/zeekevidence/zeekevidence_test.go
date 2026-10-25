@@ -261,6 +261,13 @@ func TestCertificate(t *testing.T) {
 	if len(evs) != 1 || evs[0].Confidence != "low" {
 		t.Fatalf("handshake not completed is not evidence on its own: %+v", evs)
 	}
+	r.CertIssuer = "CN=thing-catcher.gtisc.gatech.edu,O=Internet Widgits Pty Ltd,L=Atlanta"
+	if evs := Convert([]Row{r}, local); len(evs) != 1 || !strings.Contains(evs[0].Evidence, " cert_issuer_cn=thing-catcher.gtisc.gatech.edu") {
+		t.Fatalf("issuer common name: %+v", evs)
+	}
+	if got := issuerCN("O=Acme,CN=Acme Root CA,C=US"); got != "Acme_Root_CA" {
+		t.Fatalf("issuerCN: %q", got)
+	}
 }
 
 func TestSSH(t *testing.T) {

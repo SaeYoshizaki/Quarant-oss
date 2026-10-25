@@ -8,7 +8,9 @@ the dataset (SCANNERS, e.g. the Nessus host of YourThings 2018-03-20) are
 not counted for the credential provisions: they are guesses, not the
 device's password (as for the attackers' guesses in E9). Credentials a
 household phone sends to a device still count: the device accepts a
-cleartext login.
+cleartext login. Likewise, events on TLS connections whose certificate was
+issued by a dataset's own interception proxy (dataset-interceptors.txt next
+to the evidence map, O12) are not counted.
 
 Each run directory holds q/, z/ and m/ as written by rerun-oss1.sh. Devices
 are counted by MAC within a group, as in evidence_rates.py; the observed
@@ -21,6 +23,7 @@ import collections
 import glob
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -46,6 +49,9 @@ def main():
     emap, excl, scan, out_md = sys.argv[1:5]
     roots = sys.argv[5:]
     scanners = {l.strip().lower() for l in open(scan) if l.strip() and not l.startswith("#")}
+    ip = os.path.join(os.path.dirname(emap), "dataset-interceptors.txt")
+    interceptors = {l.strip().lower() for l in open(ip) if l.strip() and not l.startswith("#")} if os.path.exists(ip) else set()
+    issuer = re.compile(r"\bcert_issuer_cn=(\S+)")
     provs = [p for p in json.load(open(emap))["provisions"]
              if p["signals"] and not p["signals"][0].startswith("identity_evidence")]
     exclude = {l.strip().lower() for f in excl.split(",") for l in open(f) if l.strip() and not l.startswith("#")}
@@ -67,6 +73,9 @@ def main():
                             continue
                         keys.add(e.get("device_key"))
                         if e.get("confidence") == "low":
+                            continue
+                        m = issuer.search(e.get("evidence") or "")
+                        if m and m.group(1).lower() in interceptors:
                             continue
                         mac = er.device_id(inv, e.get("device_key") or e.get("src_ip", ""))
                         if mac in exclude:

@@ -68,6 +68,9 @@ export {
 		cert_sig_alg: string &log &optional;
 		cert_self_signed: bool &log &optional;
 		cert_expired: bool &log &optional;
+		# the issuer's distinguished name: public, and the only way to tell
+		# an interception proxy's certificate from the server's own
+		cert_issuer: string &log &optional;
 		established: bool &log &optional;
 		# MQTT / FTP
 		has_username: bool &log &optional;
@@ -297,6 +300,7 @@ event SSL::log_ssl(rec: SSL::Info)
 		if ( cert?$key_length ) r$cert_key_length = cert$key_length;
 		r$cert_sig_alg = cert$sig_alg;
 		r$cert_self_signed = cert$subject == cert$issuer;
+		r$cert_issuer = cert$issuer;
 		r$cert_expired = cert$not_valid_after < rec$ts || cert$not_valid_before > rec$ts;
 		}
 	Log::write(QuarantEvidence::LOG, r);
