@@ -98,6 +98,12 @@
 - **検証できること**：実際の家庭に置いた、ほかのデータにない機器（Ring、August、Nest、Wink、VeraLite など）。見たことのない機器での見逃しの確認に使った。
 - **限界**：対応表にはスマートフォンや PC も載っているので、除外が必要（[assessment/yourthings-non-iot-macs.txt](assessment/yourthings-non-iot-macs.txt)）。HTTP の多い日（3 月 20 日）は、Quarant の機器の識別の再計算が遅く、解析に何時間もかかる（STATUS の既知の問題 10）。
 
+### Deakin IoT Traffic Dataset（2026-10-25 に追加）
+
+- **URL**：doi:10.26187/deakin.28013234.v2（CC BY 4.0）。2023 年 5 月〜2024 年 5 月の 119 日、今の市販機器 24 台（Echo Dot 第 4 世代、Echo Show 8、TP-Link Tapo のカメラ、EZVIZ のカメラ、Tuya のドアベル、Ring のドアベル、Galaxy Watch など）。機器と MAC の対応表（`macAddresses.csv`）つき。
+- **形式**：1 日 1 つの PCAP。Linux の cooked 形式（SLL）で、送信元の MAC アドレスしか記録されていない。
+- **注意**：IoT 機器だけに絞った版（`pcapIoT`、`IoT_*.pcap`、31.6GB）は、**機器が送ったパケットしか入っていない**。外から機器へのパケットがなく、TLS のサーバーの応答（選ばれた版）も見えない。2026-10-25 に全日を解析して気づき、使わないことにした。両方向を含む版（`pcapFull`、82.6GB）は 2023 年 7 月下旬〜9 月と 2024 年 3 月末〜5 月だけ公開されている。そのうち実験に使う 34 日分（28.1GB）を取得した。
+
 ## 見送ったデータセットと理由
 
 | データセット | 理由 |
