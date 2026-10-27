@@ -1,0 +1,9 @@
+Countermeasure plan: rules=8 out=/Users/yoshizakisae/datasets/oss-work/deakin-cm-run/learn/plan.json
+  block_inbound            0
+  block_weak_destinations  6
+  isolate                  0
+  block_weak_ports         2
+  router_default           0
+  isolate_iot              0
+  block_cleartext_ports    0
+  allowlist                0

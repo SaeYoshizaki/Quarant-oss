@@ -1496,4 +1496,13 @@ python3 scripts/accuracy/compare_misses.py docs/assessment/evidence-map.json ~/d
 
 **見つける側**：`pcapFull` の 34 日を Quarant と Zeek で解析した（`runs-oss1-deakin`）。対応表の 24 台のうち、通信が見えたのは 19 台（集計の対象は 2023 年 14 台、2024 年 17 台）。弱点の証拠そのものが少ない。古い暗号は Netatmo のカメラ（SSL 3.0 が選ばれた）、Echo Show 8（TLS 1.0）、Samsung のモニター（SHA-1 の証明書、Zeek から）。平文の Cookie は Samsung のモニター。Zeek で増えたのは DHCP で名乗る版（udhcp 1.19.4、dhcpcd 5.5.6 など、2023 年 6 台、2024 年 7 台）。
 
-**減らす側**：2023-07-26〜08-01 で学習・計画し、2023-08-14〜20、08-31〜09-06、2024-04-08〜14、05-13〜19 に当てる（[scripts/assessment/deakin_countermeasures.sh](../scripts/assessment/deakin_countermeasures.sh)、O9 と O10 を一度に）。結果はあとで追記する。
+**減らす側**：2023-07-26〜08-01 で学習・計画し、2023-08-14〜20、08-31〜09-06、2024-04-08〜14、05-13〜19（2024-05-15 は欠け）に当てた（[scripts/assessment/deakin_countermeasures.sh](../scripts/assessment/deakin_countermeasures.sh)、O9 と O10 を一度に）。2026-10-26 に完了。
+
+- 計画：8 個のルール。すべて Samsung のモニター（平文の Cookie、SHA-1 の証明書）。許可リストは 15 台、1,437 項目。
+- 独立した物差しの減り方（2 週間後／1 か月後／8 か月後／10 か月後）：Quarant の広いルール 50／100／50／0%、平文のポートの一律遮断 25／100／50／0%、許可リスト 25／0／0／75%、宛先ごと 0%、普通のルーターと IoT 用のネットワークは 0%。
+- 主な通信が止まった機器：許可リストは 1／2／7／8 台（中央値 0.9→44.2%）。Quarant の広いルールは毎週 1 台（止めたパケットの中央値は 0.0%）、宛先ごとは 0 台。
+- 残った脅威：Echo Show 8、Netatmo のカメラ、Aeotec のハブ、Galaxy Watch の「秘密らしい名前の値」（`cred_named`、名前だけの候補）と、Echo Show 8 の TLS 1.0（w1）。学習の週に Quarant の証拠（確度 medium 以上）がなかったので、計画に入っていない。`cred_named` が本当に秘密かは確かめていない。
+- 独立した物差しで宛先ごとのルールが 0% なのは、モニターの残った脅威が、学習の週と違う宛先に送られていたためと考えている（未確認）。
+- 結果：[assessment/countermeasure-deakin/](assessment/countermeasure-deakin/)。
+
+**限界**：脅威が週に 0〜5 件と少なく、1 件で割合が大きく動く。週を増やすには、残りの pcapFull を置く容量が要る。
